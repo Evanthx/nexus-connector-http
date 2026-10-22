@@ -1,0 +1,93 @@
+nexusrpc: "1.0.0"
+$schema: https://json-schema.org/draft/2020-12/schema
+
+services:
+  HTTPService:
+    # The wire names are pinned so that callers built against earlier versions still reach the
+    # service and operation.
+    fqn: HTTPService
+    x-go-name: HTTPService
+    description: "Makes outbound HTTP requests on behalf of callers in other namespaces."
+    operations:
+      sendRequest:
+        fqn: sendRequest
+        description: "Make one HTTP request, with retries, and return the response."
+        input:
+          $ref: "#/$defs/SendRequestInput"
+        output:
+          $ref: "#/$defs/SendRequestOutput"
+
+$defs:
+  SendRequestInput:
+    type: object
+    properties:
+      url:
+        type: string
+        x-go-name: URL
+        description: "Absolute http or https URL"
+      method:
+        type: string
+        enum: [GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS]
+        default: GET
+        description: "HTTP method"
+      headers:
+        type: object
+        additionalProperties:
+          type: string
+        description: "Request headers. An Authorization value that starts with HTTP_CONNECTOR_SECRET_ names an environment variable on the connector worker, whose value is sent instead"
+      queryParams:
+        type: object
+        additionalProperties:
+          type: string
+        description: "Query parameters, added to any already in the URL"
+      username:
+        type: string
+        description: "Basic auth username. The password is the API key from apiKeyEnvVar, which this needs; apiKeyParam must be unset"
+      apiKeyEnvVar:
+        type: string
+        x-go-name: APIKeyEnvVar
+        description: "Name of an environment variable on the connector worker that holds an API key. The name must start with HTTP_CONNECTOR_SECRET_. The value is read at call time and never enters history"
+      apiKeyParam:
+        type: string
+        x-go-name: APIKeyParam
+        description: "Query parameter to put the API key in. If empty, the key is sent in the Authorization header: as the basic auth password if username is set, else as a Bearer token"
+      body:
+        type: string
+        description: "Request body"
+      timeoutSeconds:
+        type: integer
+        default: 30
+        description: "Timeout for one attempt, in seconds, from 1 to 60"
+      scheduleToCloseSeconds:
+        type: integer
+        default: 90000
+        description: "Total time for every attempt and every wait between them, in seconds, from timeoutSeconds to 90000 (25 hours, the default). Once it is up, the call fails with its last error. It must end before the caller's Nexus operation times out, or the request is rejected"
+    required:
+      - url
+    additionalProperties: false
+
+  SendRequestOutput:
+    type: object
+    properties:
+      statusCode:
+        type: integer
+      status:
+        type: string
+        description: "Status line, such as 200 OK"
+      headers:
+        type: object
+        additionalProperties:
+          type: array
+          items:
+            type: string
+      body:
+        type: string
+      durationMillis:
+        type: integer
+        description: "How long the HTTP call took"
+    required:
+      - statusCode
+      - status
+      - headers
+      - body
+      - durationMillis
