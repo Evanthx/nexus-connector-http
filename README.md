@@ -47,6 +47,9 @@ a `200 OK`.
 - [How the code works](#how-the-code-works): the packages, and the path of a request through them.
 - [Next step](#next-step): connectors for APIs that don't follow the HTTP standard.
 
+AI agents: see [AGENTS.md](AGENTS.md) for how to set up, run and call this connector, and how the
+code works.
+
 ## How to use
 
 A workflow in any namespace calls the connector through its Nexus endpoint: service `HTTPService`,
