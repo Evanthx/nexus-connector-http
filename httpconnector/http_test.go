@@ -1,7 +1,9 @@
 package httpconnector
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -264,7 +266,43 @@ func TestSendRequest_TimeoutIsTransient(t *testing.T) {
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeTransient, ae.Type())
 	require.False(t, ae.NonRetryable())
+	require.Equal(t, fmt.Sprintf("calling %s: no response within timeoutSeconds (1s)", srv.URL), ae.Message())
 	require.Less(t, time.Since(start), 10*time.Second)
+}
+
+// A response whose body is still arriving when timeoutSeconds runs out fails with a retryable
+// Transient error that names timeoutSeconds.
+func TestSendRequest_BodyTimeoutIsTransient(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "partial")
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))})
+	ae := appErr(t, err)
+	require.Equal(t, ErrorTypeTransient, ae.Type())
+	require.False(t, ae.NonRetryable())
+	require.Equal(t, fmt.Sprintf("reading the response from %s: not finished within timeoutSeconds (1s)", srv.URL), ae.Message())
+}
+
+// A TLS certificate that doesn't verify fails with a non-retryable ClientError: the next attempt
+// would get the same certificate.
+func TestSendRequest_BadCertificateIsClientError(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL})
+	ae := appErr(t, err)
+	require.Equal(t, ErrorTypeClientError, ae.Type())
+	require.True(t, ae.NonRetryable())
+	require.Contains(t, ae.Message(), "tls: failed to verify certificate")
 }
 
 // A request that can't be made fails with a non-retryable InvalidRequest, without being sent.
@@ -490,6 +528,82 @@ func TestSendRequest_RetryDelays(t *testing.T) {
 	}
 }
 
+// runRemapped runs an activity that calls SendRequest and, on success, applies status instead, as
+// a library caller does when a 2xx body says the request failed. It starts with the heartbeat
+// details given, if any, and returns those the attempt recorded, to pass to the next attempt.
+func runRemapped(t *testing.T, a *HTTPActivities, req httpapi.SendRequestInput, status int, heartbeat *int) (*int, error) {
+	t.Helper()
+	var ts testsuite.WorkflowTestSuite
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivityWithOptions(func(ctx context.Context, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+		out, err := a.SendRequest(ctx, req)
+		if err != nil {
+			return httpapi.SendRequestOutput{}, err
+		}
+		return httpapi.SendRequestOutput{}, a.ApplyStatus(ctx, req, status, out)
+	}, activity.RegisterOptions{Name: "Remapped"})
+	if heartbeat != nil {
+		env.SetHeartbeatDetails(*heartbeat)
+	}
+	var recorded *int
+	env.SetOnActivityHeartbeatListener(func(_ *activity.Info, d converter.EncodedValues) {
+		var n int
+		require.NoError(t, d.Get(&n))
+		recorded = &n
+	})
+	_, err := env.ExecuteActivity("Remapped", req)
+	return recorded, err
+}
+
+// A 200 the caller remaps to 429 marks the rate-limit key, as a real 429 does: the activity waits
+// the window, and the next request with the same key isn't sent.
+func TestApplyStatus_RemappedRateLimit(t *testing.T) {
+	srv, hits := countingServer(t, 200, "slow down")
+	a := newWithWindow(testWindow)
+	req := httpapi.SendRequestInput{URL: srv.URL}
+
+	_, err := runRemapped(t, a, req, http.StatusTooManyRequests, nil)
+	ae := appErr(t, err)
+	require.Equal(t, ErrorTypeRateLimited, ae.Type())
+	require.Equal(t, testWindow, ae.NextRetryDelay())
+	require.Equal(t, fmt.Sprintf("%s returned status 200, treated as 429", srv.URL), ae.Message())
+	var out httpapi.SendRequestOutput
+	require.NoError(t, ae.Details(&out))
+	require.Equal(t, int64(200), out.StatusCode)
+	require.Equal(t, "slow down", out.Body)
+
+	_, err = runSendRequest(t, a, req)
+	require.Equal(t, ErrorTypeRateLimited, appErr(t, err).Type())
+	require.Equal(t, int32(1), hits.Load(), "the second request must be held back by the cache")
+}
+
+// A 200 the caller remaps to 503 backs off as a real 503 does: 1s, then 2s, counting through the
+// heartbeat details.
+func TestApplyStatus_RemappedTransientBacksOff(t *testing.T) {
+	srv, _ := countingServer(t, 200, "try again later")
+	a := newWithWindow(testWindow)
+	req := httpapi.SendRequestInput{URL: srv.URL}
+
+	heartbeat, err := runRemapped(t, a, req, http.StatusServiceUnavailable, nil)
+	ae := appErr(t, err)
+	require.Equal(t, ErrorTypeTransient, ae.Type())
+	require.False(t, ae.NonRetryable())
+	require.Equal(t, time.Second, ae.NextRetryDelay())
+	require.NotNil(t, heartbeat)
+
+	_, err = runRemapped(t, a, req, http.StatusServiceUnavailable, heartbeat)
+	require.Equal(t, 2*time.Second, appErr(t, err).NextRetryDelay())
+}
+
+// A 200 the caller remaps to a 4xx fails with a non-retryable ClientError.
+func TestApplyStatus_RemappedClientError(t *testing.T) {
+	srv, _ := countingServer(t, 200, "no such item")
+	_, err := runRemapped(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL}, http.StatusNotFound, nil)
+	ae := appErr(t, err)
+	require.Equal(t, ErrorTypeClientError, ae.Type())
+	require.True(t, ae.NonRetryable())
+}
+
 func TestRateLimitKey(t *testing.T) {
 	require.Equal(t, "https://x.test|bob", RateLimitKey(httpapi.SendRequestInput{URL: "https://x.test", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}))
 	require.Equal(t, "https://x.test|"+testSecretVar, RateLimitKey(httpapi.SendRequestInput{URL: "https://x.test", APIKeyEnvVar: new(testSecretVar)}))
@@ -590,27 +704,6 @@ func TestSendRequest_RedirectErrorHidesAPIKey(t *testing.T) {
 	require.NotContains(t, ae.Error(), "s3cr3t")
 }
 
-// A redirect sends no Referer, which would carry the API key in the first URL's query to the next
-// server.
-func TestSendRequest_RedirectSendsNoReferer(t *testing.T) {
-	t.Setenv(testSecretVar, "s3cr3t")
-	referer := make(chan string, 1)
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		referer <- r.Header.Get("Referer")
-	}))
-	defer other.Close()
-	srv := httptest.NewServer(http.RedirectHandler(other.URL, http.StatusFound))
-	defer srv.Close()
-
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
-		URL:          srv.URL,
-		APIKeyEnvVar: new(testSecretVar),
-		APIKeyParam:  new("key"),
-	})
-	require.NoError(t, err)
-	require.Empty(t, <-referer)
-}
-
 // trustTLS makes SendRequest, which uses http.DefaultTransport, trust srv's test certificate for
 // the rest of the test. It changes a process-wide value, so a test that uses it can't run in
 // parallel.
@@ -642,36 +735,6 @@ func TestSendRequest_NoRedirectFromHTTPSToHTTP(t *testing.T) {
 	require.Equal(t, int64(http.StatusFound), out.StatusCode)
 	require.Equal(t, []string{plain.URL}, out.Headers.AdditionalProperties["Location"])
 	require.Zero(t, hits.Load())
-}
-
-// A redirect keeps the Authorization header only within the first URL's origin. http.Client alone
-// would also send it to another port, scheme or subdomain of the same host.
-func TestSendRequest_RedirectDropsAuthorizationForAnotherOrigin(t *testing.T) {
-	t.Setenv(testSecretVar, "Bearer s3cr3t")
-	got := make(chan string, 1)
-	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/start" {
-			http.Redirect(w, r, "/", http.StatusFound)
-			return
-		}
-		got <- r.Header.Get("Authorization")
-	}))
-	defer final.Close()
-	auth := &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"Authorization": testSecretVar}}
-
-	// A redirect within the same server: the same origin.
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
-		URL: final.URL + "/start", Headers: auth,
-	})
-	require.NoError(t, err)
-	require.Equal(t, "Bearer s3cr3t", <-got)
-
-	// Another port on the same host: another origin.
-	other := httptest.NewServer(http.RedirectHandler(final.URL, http.StatusFound))
-	defer other.Close()
-	_, err = runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: other.URL, Headers: auth})
-	require.NoError(t, err)
-	require.Empty(t, <-got)
 }
 
 // A secret the endpoint echoes back is redacted from the response's headers and body, as is and
@@ -771,7 +834,7 @@ func TestSendRequest_ResponseSizeLimit(t *testing.T) {
 		ae := appErr(t, err)
 		require.Equal(t, ErrorTypeClientError, ae.Type(), "size %d", tc.size)
 		require.True(t, ae.NonRetryable())
-		require.Contains(t, ae.Error(), "body over")
+		require.Equal(t, fmt.Sprintf("%s returned status 200, but its body is over the connector's 2 MiB limit, so the response isn't returned", srv.URL), ae.Message())
 	}
 }
 

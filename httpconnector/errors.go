@@ -19,7 +19,8 @@ const (
 	ErrorTypeInvalidRequest = "InvalidRequest"
 	// ErrorTypeClientError: the endpoint answered with a status that sending the same request
 	// again won't change: most 4xx, 501, 505, 511, and a 3xx that wasn't followed. Also a response
-	// body over maxResponseBytes, whatever the status. Not retried.
+	// body over maxResponseBytes, whatever the status, and a TLS certificate that doesn't verify.
+	// Not retried.
 	ErrorTypeClientError = "ClientError"
 	// ErrorTypeTransient: 408, 409, 420, 421, 423, 424, 425, any other 5xx, or a network failure
 	// or timeout. Retried with backoff.

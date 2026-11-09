@@ -27,8 +27,8 @@ It is useful in three ways:
    nobody writes HTTP code. It also shows two ways to wrap several calls in one operation: an
    activity that starts a job and polls for its result, and a workflow that makes several calls.
 
-All three assume the API answers with standard HTTP status codes. See [Next step](#next-step) for
-the plan to handle an API that doesn't, such as one that reports errors or rate limits in the body of
+All three assume the API answers with standard HTTP status codes. See [APIs that don't follow the standard](#apis-that-dont-follow-the-standard)
+for how to handle an API that doesn't, such as one that reports errors or rate limits in the body of
 a `200 OK`.
 
 ```
@@ -45,7 +45,8 @@ a `200 OK`.
 - [How to use](#how-to-use): calling the connector, its options, what it does, and running it.
 - [See it in action](#see-it-in-action): the test workflow.
 - [How the code works](#how-the-code-works): the packages, and the path of a request through them.
-- [Next step](#next-step): connectors for APIs that don't follow the HTTP standard.
+- [APIs that don't follow the standard](#apis-that-dont-follow-the-standard): connectors for APIs
+  that report errors or rate limits in a `200 OK`, with `ApplyStatus`.
 
 AI agents: see [AGENTS.md](AGENTS.md) for how to set up, run and call this connector, and how the
 code works.
@@ -167,7 +168,7 @@ of values), `body`, and `durationMillis`.
 #### The request
 
 The connector sends one HTTP request per attempt, with the URL, method, headers, query parameters
-and body given. Redirects are followed, up to 10, except from `https` to a URL that isn't `https`. It returns a
+and body given. Redirects are followed as Go's `http.Client` follows them, up to 10, except from `https` to a URL that isn't `https`. It returns a
 **2xx** answer as the operation's result. Any other answer is an error that carries the response,
 and is retried or not depending on its status, below.
 
@@ -178,7 +179,7 @@ Every failure is an `ApplicationError` whose type is one of these:
 | Type | When | Retried |
 |---|---|---|
 | `InvalidRequest` | The request can't be made: a bad URL, a `timeoutSeconds` outside 1–60, a `scheduleToCloseSeconds` out of range or not shorter than the caller's operation timeout, a header name or value that isn't valid HTTP (such as one with a newline), or a bad or missing API key variable. It is never sent. | No |
-| `ClientError` | The endpoint answered with a status that sending the same request again won't change: any 4xx not listed under `Transient` or `RateLimited`, 501, 505, 511, or a 3xx that wasn't followed (such as a 304, or a redirect from `https` to `http`). Also a response body over 2 MiB; the connector stops reading after 2 MiB. | No |
+| `ClientError` | The endpoint answered with a status that sending the same request again won't change: any 4xx not listed under `Transient` or `RateLimited`, 501, 505, 511, or a 3xx that wasn't followed (such as a 304, or a redirect from `https` to `http`). Also a response body over 2 MiB; the connector stops reading after 2 MiB. Also a TLS certificate that doesn't verify (expired, wrong host, or an unknown authority). | No |
 | `Transient` | The endpoint answered 408, 409, 420, 421, 423, 424, 425, or any 5xx except 501, 505 and 511, or the request timed out or failed on the network. | With backoff: 1s, doubling, at most 30s apart |
 | `RateLimited` | The endpoint answered 429, or another request with the same rate-limit key did within the [rate-limit window](#rate-limiting). | After the rest of that window |
 
@@ -320,10 +321,12 @@ The connector also keeps keys from leaking on the way back:
   replaced with `[REDACTED]` in the response's status, headers and body, and in error messages:
   as is, escaped in a URL, quoted, or escaped in a JSON string. A key encoded any other way, such
   as in base64, isn't caught.
-- **Redirects keep credentials where the caller sent them.** A redirect from `https` to a URL that
-  isn't `https` (such as `http`) isn't followed; the redirect itself is the response, and fails as a `ClientError`. The
-  `Authorization` header (an API key, basic auth, or any other) is sent only to the first URL's
-  scheme, host and port, and no redirect sends a `Referer`.
+- **Redirects never downgrade to plaintext.** A redirect from `https` to a URL that isn't `https`
+  (such as `http`) isn't followed: the redirect itself is the response, and fails as a
+  `ClientError`. Otherwise redirects follow Go's default policy: the `Authorization` header goes to
+  the same host and its subdomains on any port, and is dropped for any other host, and each
+  redirect sends a `Referer` with the previous URL, query string included (so an `apiKeyParam`
+  key). Call only endpoints you trust with the key.
 
 #### Known limitations
 
@@ -553,8 +556,9 @@ endpoint's description.
    - checks the rate-limit cache for the request's key (`RateLimitKey`). If it is cached, it fails
      with `RateLimited` without sending;
    - sends the request with an `http.Client` whose timeout is `timeoutSeconds` and whose
-     `checkRedirect` enforces the redirect rules. A transport error is `Transient`, with its
-     message passed through `redact`;
+     `checkRedirect` refuses https → http redirects. A transport error is `Transient`, with its
+     message passed through `redact`, except a TLS certificate that doesn't verify, which is a
+     `ClientError`. An attempt that runs out `timeoutSeconds` says so;
    - reads up to 2 MiB of body, and passes the response through `redactResponse`;
    - returns the response for a 2xx, clearing the key. Otherwise `categorizeError` picks the
      type: a 429 marks the key in the cache, and `ClientError` is non-retryable. The error
@@ -598,38 +602,49 @@ The service's and operation's `fqn` values are the names callers use on the wire
 without them, nexgen would name the operation `SendRequest`, and existing callers would no longer
 reach it.
 
-## Next step
-
-### APIs that don't follow the standard
+## APIs that don't follow the standard
 
 The connector decides what to do from the status code alone, assuming each code means what the
 HTTP standard says: a 429 is a rate limit, a 503 is worth retrying, a 404 isn't (see
 [Errors](#errors)). Most APIs follow this, but not all. Some answer `200 OK` and put the real
 outcome in the body, such as an error or a rate limit.
 
-The plan is to add a hook to the connector that runs on each response before the connector
-decides what the response means. That makes a connector for such an API simple to write: a thin
-shell that uses this connector's code as a library. The shell has its own Nexus service and
-operation, and its operation starts the `SendRequest` activity itself, on the shell's own worker.
-It doesn't call this connector's Nexus service, so a call makes one Nexus hop, not two. The shell:
+A connector for such an API is a thin shell that uses this connector's code as a library. The
+shell has its own Nexus service and operation, on its own worker, and its activities call
+`SendRequest` as a function inside their own activity rather than calling this connector's Nexus
+service, so a call makes one Nexus hop, not two. The shell:
 
 - takes inputs specific to the API, for a better experience for its callers, and turns them into
   a `SendRequestInput`; and
-- passes in a function that reads each response and can return an error type for it, such as
-  `RateLimited` for a 200 whose body says the request was rate limited.
+- reads each response `SendRequest` returns, and when the body says something the status didn't,
+  calls `ApplyStatus` with the status the response should have had, and returns the error it
+  gives back:
 
-`SendRequest` then treats the response as if the status code had said so: retrying with backoff,
-backing off from the rate limit, or failing without a retry. When the function returns nothing,
-the status code decides, as now, so the function only has to recognize what is different about
-the API.
+  ```go
+  resp, err := a.SendRequest(ctx, req)
+  if err == nil && bodySaysRateLimited(resp) {
+      return nil, a.ApplyStatus(ctx, req, http.StatusTooManyRequests, resp)
+  }
+  ```
 
-The hook isn't there yet. Everything else a shell needs is already exported: `New` (the
-activities, with their rate-limit cache), `Validate` and `CheckCallerTimeout` (the checks the
-operation makes before starting the activity), `ActivityOptions`, and the `SendRequest` activity.
-The OpenAPI proof of concept ([nexus-connector-openapi](https://github.com/Evanthx/nexus-connector-openapi)) is a shell of
-this kind, generated rather than written by hand. Its activities call `SendRequest` as a function
-inside their own activity, rather than starting it, so they can decode the response into the
-operation's output type.
+`ApplyStatus` is what `SendRequest` itself does with every response, so the remapped response is
+handled exactly as if the endpoint had sent that status: a 429 marks the rate-limit key, so other
+requests with the same key wait out the window without being sent, and the activity's next attempt
+waits the window too; a Transient status backs off from 1s, doubling up to 30s; anything else fails
+without a retry. The error's message says both statuses (`returned status 200, treated as 429`),
+and its details hold the response. The returned error must be returned from the activity: it
+carries the retry delay. When the body says nothing different, the shell returns the response, and
+the status code decides, as now.
+
+This works only for code that calls `SendRequest` in-process. A workflow that calls this
+connector's Nexus operation can't reach the connector's rate-limit cache.
+
+Everything else a shell needs is exported too: `New` (the activities, with their rate-limit
+cache), `Validate` and `CheckCallerTimeout` (the checks the operation makes before starting the
+activity), and `ActivityOptions`. The OpenAPI proof of concept
+([nexus-connector-openapi](https://github.com/Evanthx/nexus-connector-openapi)) is a shell of this
+kind, generated rather than written by hand. Its activities call `SendRequest` in-process so they
+can decode the response into the operation's output type.
 
 That gives two connectors exposed over Nexus: this generic one, and the API-specific one. The
 API-specific connector offers an experience tailored to its API, and because it uses this

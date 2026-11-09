@@ -5,10 +5,12 @@ package httpconnector
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -158,9 +160,10 @@ func categorizeError(status int) string {
 //   - A request that can't be made fails with InvalidRequest, without being sent.
 //   - If another call for the same rate-limit key got a 429 within the last window, it fails with
 //     RateLimited without being sent, and the next attempt waits for the rest of the window.
-//   - Otherwise it is sent. 2xx returns the response and clears the key. 429 marks the key and
-//     fails with RateLimited. Other statuses fail with ClientError or Transient (see categorizeError),
-//     with the response in the error's details.
+//   - Otherwise it is sent, and the response's status decides the result (see ApplyStatus). 2xx
+//     returns the response and clears the key. 429 marks the key and fails with RateLimited. Other
+//     statuses fail with ClientError or Transient (see categorizeError), with the response in the
+//     error's details.
 func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
 	logger := activity.GetLogger(ctx)
 
@@ -184,19 +187,34 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 		if errors.As(err, &urlErr) {
 			err = urlErr.Err
 		}
+		if attemptTimedOut(err, start, req) {
+			msg := fmt.Sprintf("calling %s: no response within timeoutSeconds (%s)", req.URL, timeout(req))
+			return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
+		}
 		// The rest can still hold a secret the server echoed, such as in a redirect's Location.
 		msg := redact(fmt.Sprintf("calling %s: %v", req.URL, err), secrets)
+		// A certificate that doesn't verify won't on the next attempt either.
+		var certErr *tls.CertificateVerificationError
+		if errors.As(err, &certErr) {
+			return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, ErrorTypeClientError,
+				temporal.ApplicationErrorOptions{NonRetryable: true})
+		}
 		return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
+		if attemptTimedOut(err, start, req) {
+			msg := fmt.Sprintf("reading the response from %s: not finished within timeoutSeconds (%s)", req.URL, timeout(req))
+			return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
+		}
 		msg := redact(fmt.Sprintf("reading the response from %s: %v", req.URL, err), secrets)
 		return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
 	}
 	if len(body) > maxResponseBytes {
-		msg := fmt.Sprintf("%s returned status %d with a body over %d bytes", req.URL, resp.StatusCode, maxResponseBytes)
+		msg := fmt.Sprintf("%s returned status %d, but its body is over the connector's %d MiB limit, so the response isn't returned",
+			req.URL, resp.StatusCode, maxResponseBytes>>20)
 		return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, ErrorTypeClientError,
 			temporal.ApplicationErrorOptions{NonRetryable: true})
 	}
@@ -209,36 +227,71 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 		DurationMillis: elapsed,
 	}
 	redactResponse(&out, secrets)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	if err := a.ApplyStatus(ctx, req, resp.StatusCode, out); err != nil {
+		return httpapi.SendRequestOutput{}, err
+	}
+	return out, nil
+}
+
+// ApplyStatus makes out, a response SendRequest returned for req, count as if the endpoint had
+// answered with status. It is what SendRequest itself does with every response, exported for an
+// activity that calls SendRequest and finds the real answer in the body, such as a 200 whose body
+// says the caller is rate limited:
+//
+//	resp, err := a.SendRequest(ctx, req)
+//	if err == nil && bodySaysRateLimited(resp) {
+//		return nil, a.ApplyStatus(ctx, req, http.StatusTooManyRequests, resp)
+//	}
+//
+// For a 2xx it clears req's rate-limit key and returns nil. Otherwise it returns the error the
+// activity must return, with out in its details, by the status's type (see categorizeError):
+//
+//   - RateLimited (429): marks req's rate-limit key, so every call on this worker with the same
+//     key waits out the window without being sent, and the next attempt waits the window too.
+//   - Transient: the next attempt backs off as for any Transient error (1s, doubling up to 30s),
+//     counting Transient errors in a row through the activity's heartbeat details.
+//   - ClientError: not retried.
+//
+// ctx must be the activity's context. out should be SendRequest's response, which is already
+// redacted; ApplyStatus doesn't redact it again.
+func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.SendRequestInput, status int, out httpapi.SendRequestOutput) error {
+	key := RateLimitKey(req)
+	if status >= 200 && status < 300 {
 		a.lim.clear(key)
-		return out, nil
+		return nil
 	}
 
-	msg := fmt.Sprintf("%s returned status %d", req.URL, resp.StatusCode)
-	errType := categorizeError(resp.StatusCode)
+	msg := fmt.Sprintf("%s returned status %d", req.URL, status)
+	if int64(status) != out.StatusCode {
+		msg = fmt.Sprintf("%s returned status %d, treated as %d", req.URL, out.StatusCode, status)
+	}
+	errType := categorizeError(status)
 	if errType == ErrorTypeRateLimited {
 		// Every call on this worker with the same key now waits out the window.
 		a.lim.mark(key, time.Now())
-		logger.Warn("Rate limited: endpoint returned 429", "key", key, "window", a.lim.ttl.String())
-		return httpapi.SendRequestOutput{}, rateLimitedError(ctx, msg, a.lim.ttl, out)
+		activity.GetLogger(ctx).Warn("Rate limited", "status", status, "key", key, "window", a.lim.ttl.String())
+		return rateLimitedError(ctx, msg, a.lim.ttl, out)
 	}
 	if errType == ErrorTypeTransient {
-		return httpapi.SendRequestOutput{}, transientError(ctx, msg, out)
+		return transientError(ctx, msg, out)
 	}
-	return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, errType, temporal.ApplicationErrorOptions{
+	return temporal.NewApplicationErrorWithOptions(msg, errType, temporal.ApplicationErrorOptions{
 		Details:      []any{out},
 		NonRetryable: true,
 	})
 }
 
-// checkRedirect is http.Client's default redirect policy, changed so that credentials go only
-// where the caller sent them:
-//
-//   - A redirect from https to http isn't followed. SendRequest gets the redirect itself as the
-//     response, which fails as a ClientError.
-//   - The Authorization header goes only to the first URL's origin (scheme, host and port).
-//     http.Client alone also sends it to another scheme, port or subdomain of the same host.
-//   - No Referer is sent. It would carry the previous URL, and any API key in its query, onward.
+// attemptTimedOut reports whether err is the attempt running out its timeoutSeconds. Other
+// timeouts, such as the transport's 30-second dial timeout, keep Go's own message.
+func attemptTimedOut(err error, start time.Time, req httpapi.SendRequestInput) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout(req)
+}
+
+// checkRedirect is http.Client's default redirect policy, except that a redirect from https to
+// http isn't followed: http.Client alone would follow it and send the Authorization header in
+// plaintext. SendRequest gets the redirect itself as the response, which fails as a ClientError.
+// Setting CheckRedirect replaces http.Client's limit of 10 redirects, so it is enforced here.
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirects {
 		return fmt.Errorf("stopped after %d redirects", maxRedirects)
@@ -246,10 +299,6 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
 		return http.ErrUseLastResponse
 	}
-	if first := via[0].URL; req.URL.Scheme != first.Scheme || !strings.EqualFold(req.URL.Host, first.Host) {
-		req.Header.Del("Authorization")
-	}
-	req.Header.Del("Referer")
 	return nil
 }
 

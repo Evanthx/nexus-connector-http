@@ -106,7 +106,7 @@ The input as JSON:
 | `timeoutSeconds` | 30 | One attempt, 1–60. |
 | `scheduleToCloseSeconds` | 90000 (25h) | Every attempt and wait, from `timeoutSeconds` to 90000. |
 
-Only a **2xx** is a result. Redirects are followed (up to 10), except https → http.
+Only a **2xx** is a result. Redirects are followed with Go's default policy (up to 10), except https → http.
 
 ## Rules that break things when ignored
 
@@ -166,7 +166,7 @@ callers find it with `errors.As`. For an HTTP response, `Details` holds the `Sen
 | Type | Cause | Retried |
 |---|---|---|
 | `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, `scheduleToCloseSeconds` out of range or not shorter than the caller's timeout, invalid header name or value, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
-| `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; or a body over 2 MiB. | No |
+| `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
 | `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 1s×2 up to 30s |
 | `RateLimited` | 429, or the key is in the rate-limit cache. | After the window |
 
@@ -197,7 +197,7 @@ go test -short ./...                                         # skip the end-to-e
   `…OrDefault()` accessors. The generated `MarshalJSON`/`UnmarshalJSON` validate against the
   contract.
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
-  `ScheduleToClose` and the `ErrorType*` constants. `New`, `HTTPActivities`, `Validate`,
+  `ScheduleToClose` and the `ErrorType*` constants. `New`, `HTTPActivities`, `ApplyStatus`, `Validate`,
   `CheckCallerTimeout`, `ActivityOptions`, `RateLimitKey`, `InvalidRequestError`, `SecretEnvPrefix`
   and `RateLimitMinutesEnvVar` are exported on purpose, though only the package uses them: they are
   the connector's API for code that registers or calls it differently (such as
@@ -215,7 +215,10 @@ go test -short ./...                                         # skip the end-to-e
 - `http.nexusrpc.yaml` — the contract; `generated/httpapi` is generated from it.
 - `httpconnector/` — nearly all logic.
   - `http.go`: `TaskQueue`; `Register`, which builds the Nexus operation inline; the `SendRequest`
-    activity; `categorizeError()` (status → error type); `checkRedirect`; redaction.
+    activity; `ApplyStatus`, which turns a response's status into the result (clears or marks the
+    rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
+    whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
+    error type); `checkRedirect`; redaction.
   - The operation validates first (`Validate`, then `CheckCallerTimeout` against the caller's
     remaining time from the `operation-timeout` header) and returns a `BadRequest` handler error
     (cause: an `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
@@ -239,11 +242,11 @@ go test -short ./...                                         # skip the end-to-e
 - Secrets: `redact` replaces each secret from `secrets(req)` (including an `Authorization`
   variable's credentials without the scheme, and the base64 `user:key` for basic auth) raw,
   URL-escaped, Go-quoted and JSON-escaped, in transport and body-read errors and, through
-  `redactResponse`, in the response's status, headers and body. `checkRedirect` doesn't follow
-  https → http (`http.ErrUseLastResponse`, so the 3xx becomes a `ClientError` with its response),
-  sends `Authorization` only to the first URL's origin (Go alone keeps it for the same host on any
-  scheme or port, and for subdomains), and drops the `Referer`, which would carry a query key
-  onward.
+  `redactResponse`, in the response's status, headers and body. `checkRedirect` is Go's
+  default policy (10 redirects, re-enforced since setting `CheckRedirect` drops it) except that
+  it doesn't follow https → http (`http.ErrUseLastResponse`, so the 3xx becomes a `ClientError`
+  with its response); Go alone would send `Authorization` there in plaintext. Otherwise Go keeps
+  `Authorization` for the same host and subdomains, and sends `Referer` with any query key.
 - Non-2xx errors carry the `SendRequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.
 - `cmd/worker` — the connector's process: `envconfig`, `worker.New` on `TaskQueue`, `Register`.
