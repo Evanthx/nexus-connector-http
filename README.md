@@ -90,13 +90,12 @@ req := httpapi.SendRequestInput{
     APIKeyEnvVar:           new("HTTP_CONNECTOR_SECRET_ITEMS"), // optional; read on the connector
     // APIKeyParam:         new("api_key"),                    // optional; puts the key in the query instead
     TimeoutSeconds:         new(int64(10)),                    // optional; 30 if unset
-    ScheduleToCloseSeconds: new(int64(3600)),                  // optional; 90000 (25 hours) if unset
 }
 
 var resp httpapi.SendRequestOutput
 err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
-    // How long this workflow waits. It must be longer than scheduleToCloseSeconds.
-    ScheduleToCloseTimeout: httpconnector.ScheduleToClose(req) + 5*time.Minute,
+    // How long this workflow waits. The connector retries until 10 seconds before it.
+    ScheduleToCloseTimeout: time.Hour,
 }).Get(ctx, &resp)
 // On success: resp.StatusCode, resp.Status, resp.Headers, resp.Body, resp.DurationMillis.
 // On failure: see Errors below.
@@ -104,7 +103,8 @@ err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.Ne
 
 This sends `POST https://api.example.com/items?source=workflow` with the JSON body and basic auth:
 user `reporting-bot`, password the API key read from `HTTP_CONNECTOR_SECRET_ITEMS` on the
-connector. Each attempt can take 10 seconds, and failures are retried for up to an hour.
+connector. Each attempt can take 10 seconds, and failures are retried for up to an hour, less
+10 seconds.
 
 ### Call it from another language, or over HTTP
 
@@ -120,8 +120,7 @@ operation the same way. The same request as JSON:
   "body": "{\"name\":\"widget\"}",
   "username": "reporting-bot",
   "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_ITEMS",
-  "timeoutSeconds": 10,
-  "scheduleToCloseSeconds": 3600
+  "timeoutSeconds": 10
 }
 ```
 
@@ -158,7 +157,6 @@ method it doesn't list, is rejected; see [Errors](#errors).
 | `apiKeyEnvVar` | No | none | Name of an environment variable on the connector that holds an API key. Must start with `HTTP_CONNECTOR_SECRET_`. |
 | `apiKeyParam` | No | none | Query parameter to put the API key in. If unset, the key goes in the `Authorization` header: as the basic auth password with a `username`, else as `Bearer <key>`. Needs `apiKeyEnvVar`. |
 | `timeoutSeconds` | No | 30 | Timeout for one attempt, 1 to 60 seconds. |
-| `scheduleToCloseSeconds` | No | 90000 (25 hours) | Time for the whole call, every attempt and every wait between them: from `timeoutSeconds` to 90000. Must be shorter than the caller's operation timeout. |
 
 `SendRequestOutput` has `statusCode`, `status` (such as `200 OK`), `headers` (each name with a list
 of values), `body`, and `durationMillis`.
@@ -178,12 +176,13 @@ Every failure is an `ApplicationError` whose type is one of these:
 
 | Type | When | Retried |
 |---|---|---|
-| `InvalidRequest` | The request can't be made: a bad URL, a `timeoutSeconds` outside 1–60, a `scheduleToCloseSeconds` out of range or not shorter than the caller's operation timeout, a header name or value that isn't valid HTTP (such as one with a newline), a bad or missing API key variable, or a host that isn't an [allowed domain](#allowed-domains). It is never sent. | No |
+| `InvalidRequest` | The request can't be made: a bad URL, a `timeoutSeconds` outside 1–60, a caller's operation timeout too short for one attempt (see [Timeouts](#timeouts)), a header name or value that isn't valid HTTP (such as one with a newline), a bad or missing API key variable, or a host that isn't an [allowed domain](#allowed-domains). It is never sent. | No |
 | `ClientError` | The endpoint answered with a status that sending the same request again won't change: any 4xx not listed under `Transient` or `RateLimited`, 501, 505, 511, or a 3xx that wasn't followed (such as a 304, or a redirect from `https` to `http`). Also a response body over 2 MiB; the connector stops reading after 2 MiB. Also a TLS certificate that doesn't verify (expired, wrong host, or an unknown authority). | No |
 | `Transient` | The endpoint answered 408, 409, 420, 421, 423, 424, 425, or any 5xx except 501, 505 and 511, or the request timed out or failed on the network. | With backoff: 1s, doubling, at most 30s apart |
 | `RateLimited` | The endpoint answered 429, or another request with the same rate-limit key did within the [rate-limit window](#rate-limiting). | After the rest of that window |
 
-Retries stop after the request's `scheduleToCloseSeconds`; the caller then gets the last failure.
+Retries stop shortly before the caller's operation times out (see [Timeouts](#timeouts)); the
+caller then gets the last failure.
 `InvalidRequest` is caught when the operation starts, so no activity is created: the caller's
 operation fails with a `BAD_REQUEST` handler error whose cause is the `InvalidRequest` error.
 
@@ -211,31 +210,36 @@ say which field was wrong.
 | Setting | Set by | Bounds | Default |
 |---|---|---|---|
 | `timeoutSeconds` | the request | one HTTP attempt, 1 to 60 seconds | 30 |
-| `scheduleToCloseSeconds` | the request | every attempt and every wait between them, up to 25 hours | 90000 (25 hours) |
-| The Nexus operation's `ScheduleToCloseTimeout` | the caller | how long the caller waits; must be longer than `scheduleToCloseSeconds` | none |
+| The Nexus operation's timeout | the caller | how long the caller waits; the connector retries until 10 seconds before it | none |
+| `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | the connector worker | the longest the connector retries, whatever the caller's timeout | 1500 (25 hours) |
 | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | the connector worker | how long a 429 holds back requests with the same key | 5 minutes |
 
-`timeoutSeconds` can't be over 60 because an activity attempt can't take longer than that. When
-`scheduleToCloseSeconds` is up, the call fails with its last error.
+`timeoutSeconds` can't be over 60 because an activity attempt can't take longer than that.
+
+How long the connector keeps trying comes from the caller's Nexus operation timeout. The caller's
+server sends the time the operation has left in the `operation-timeout` header: the smaller of
+what remains of its `ScheduleToCloseTimeout` and its `StartToCloseTimeout`. The connector stops 10
+seconds before that, so its last error reaches the caller before the caller gives up, and never
+keeps going past `HTTP_CONNECTOR_MAX_DURATION_MINUTES` (whole minutes, at least 1, 25 hours by
+default; any other value stops the worker at startup). With no timeout, the header isn't sent and
+the maximum applies. When the time is up, the call fails with its last error.
 
 Until then, failures are retried by type: `Transient` with backoff (1s, doubling, then every 30
 seconds), `RateLimited` once per rate-limit window. The backoff counts only `Transient` failures in
 a row, so the first `Transient` failure after a rate limit waits 1s again. For example, 503, 503,
-429, 503 waits 1s, 2s, the window, then 1s. With the 25-hour default, an endpoint that keeps
-answering 503 is tried about every 30 seconds for 25 hours.
+429, 503 waits 1s, 2s, the window, then 1s. With no caller timeout and the default maximum, an
+endpoint that keeps answering 503 is tried about every 30 seconds for 25 hours.
 
-The caller's own timeout must be longer than `scheduleToCloseSeconds`. The caller's server tells
-the connector how long the operation has left, and if `scheduleToCloseSeconds` isn't shorter, the
-operation fails at once with `InvalidRequest`:
+A caller's timeout too short for one attempt (`timeoutSeconds`) plus the 10 seconds fails at once
+with `InvalidRequest`:
 
 ```
-scheduleToCloseSeconds is 90000 (25h0m0s), but the caller's Nexus operation times out in 1h0m0s:
-set scheduleToCloseSeconds lower than that, or give the operation a longer timeout
+the caller's Nexus operation times out in 20s, which leaves no time for an attempt: it needs at
+least timeoutSeconds (30s) plus 10s for the result to reach the caller; give the operation a
+longer timeout or lower timeoutSeconds
 ```
 
-Without that check, the caller would time out first and get a timeout rather than the connector's
-error, while the connector kept trying, since a caller's timeout doesn't cancel the activity. An
-operation with no timeout is always accepted. Cancelling the caller's workflow does cancel the
+Cancelling the caller's workflow does cancel the
 operation and its activity: an attempt already in flight finishes, but no more are made.
 
 #### Rate limiting
@@ -258,11 +262,11 @@ per window. This isn't strict: the waiting requests all retry when the window en
 check at the same moment, they all go out. If the first one's 429 comes back before the others
 check, they wait another window.
 
-The server doesn't schedule a retry that would start after `scheduleToCloseSeconds`, so the window
-and `scheduleToCloseSeconds` together bound how many times a request can try. With both defaults, a
-request that keeps getting 429s is sent about every 5 minutes for 25 hours. With
-`scheduleToCloseSeconds` at 600, it is sent twice and fails after about 5 minutes. A window as long
-as `scheduleToCloseSeconds` or longer means it is sent once.
+The server doesn't schedule a retry that would start after the connector's time is up (see
+[Timeouts](#timeouts)), so the window and that time together bound how many times a request can
+try. With no caller timeout and both defaults, a request that keeps getting 429s is sent about
+every 5 minutes for 25 hours. With a 10-minute caller timeout, it is sent twice and fails after
+about 5 minutes. A window as long as the connector's time or longer means it is sent once.
 
 #### API keys and secrets
 
@@ -419,6 +423,7 @@ On the connector worker (`cmd/worker`):
 |---|---|
 | `HTTP_CONNECTOR_SECRET_*` | API keys that requests can name in `apiKeyEnvVar`, or as an `Authorization` header's value. |
 | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | How long a key stays rate-limited after a 429, in whole minutes. Defaults to 5. |
+| `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | The longest a call retries, in whole minutes, when the caller's timeout is longer or unset. Defaults to 1500 (25 hours). See [Timeouts](#timeouts). |
 | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | The only domains requests can go to, comma-separated, such as `temporal.io, api.stripe.com`. Unset, any host. See [Allowed domains](#allowed-domains). |
 | `TEMPORAL_*` | How to connect to Temporal; see below. |
 
@@ -492,15 +497,15 @@ response. httpbin echoes both back:
 A failed request prints its error type, such as
 `Request failed with ClientError: https://httpbin.org/status/404 returned status 404`.
 
-The starter's flags (`-url`, `-method`, `-body`, `-schedule-to-close-seconds`) choose another
-request:
+The starter's flags (`-url`, `-method`, `-body`, and `-timeout`, the Nexus operation's timeout,
+such as `10m`, none by default) choose another request:
 
 ```bash
 go run ./testcaller/starter -url https://httpbin.org/post -method POST -body '{"hello":"world"}'
 ```
 
-You can also start the workflow with any request from the CLI. Its input is a `SendRequestInput`
-as JSON (see [Options](#options)):
+You can also start the workflow with any request from the CLI. Its inputs are a `SendRequestInput`
+as JSON (see [Options](#options)) and the Nexus operation's timeout in nanoseconds, 0 for none:
 
 ```bash
 temporal workflow start \
@@ -508,7 +513,8 @@ temporal workflow start \
   --task-queue http-testcaller \
   --type CallerWorkflow \
   --workflow-id my-request \
-  --input '{"url":"https://httpbin.org/post","method":"POST","headers":{"Content-Type":"application/json"},"body":"{\"hello\":\"world\"}"}'
+  --input '{"url":"https://httpbin.org/post","method":"POST","headers":{"Content-Type":"application/json"},"body":"{\"hello\":\"world\"}"}' \
+  --input 0
 
 temporal workflow result --namespace http-testcaller --workflow-id my-request
 ```
@@ -519,8 +525,8 @@ temporal workflow result --namespace http-testcaller --workflow-id my-request
 |---|---|
 | `go run ./testcaller/starter -url https://httpbin.org/status/404` | Fails at once with `ClientError`. |
 | `go run ./testcaller/starter -url ftp://example.com` | Fails at once with `InvalidRequest`. No activity is started. |
-| `go run ./testcaller/starter -url https://httpbin.org/status/503 -schedule-to-close-seconds 600` | Retried with backoff for 10 minutes, then fails with `Transient`. Without the flag it would keep trying for 25 hours. |
-| `go run ./testcaller/starter -url https://httpbin.org/status/429 -schedule-to-close-seconds 600` | Tried again after the rate-limit window (5 minutes by default), then fails with `RateLimited` once another window wouldn't fit in the 10 minutes: after about 5 minutes. |
+| `go run ./testcaller/starter -url https://httpbin.org/status/503 -timeout 10m` | Retried with backoff until 10 seconds before the 10 minutes are up, then fails with `Transient`. Without the flag it would keep trying for 25 hours. |
+| `go run ./testcaller/starter -url https://httpbin.org/status/429 -timeout 10m` | Tried again after the rate-limit window (5 minutes by default), then fails with `RateLimited` once another window wouldn't fit in the 10 minutes: after about 5 minutes. |
 
 While a request is being retried, the connector's namespace shows it as a standalone activity:
 
@@ -552,20 +558,21 @@ endpoint's description.
    calls `httpconnector.Register`. `Register` makes one `HTTPActivities`, which owns the
    rate-limit cache, and registers both the `HTTPService` Nexus service and its `SendRequest`
    activity with it, so every call on the worker shares one cache. It reads
-   `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` and `HTTP_CONNECTOR_ALLOWED_DOMAINS`, and fails on an
-   invalid value.
+   `HTTP_CONNECTOR_RATE_LIMIT_MINUTES`, `HTTP_CONNECTOR_ALLOWED_DOMAINS` and
+   `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, and fails on an invalid value.
 
 2. **Decoding.** The caller's request arrives through the endpoint. The generated `UnmarshalJSON`
    decodes it into a `SendRequestInput`, rejecting anything the contract doesn't allow.
 
 3. **The operation starts an activity.** The `sendRequest` operation, defined inside `Register`,
    does no HTTP work. It calls `Validate`, which builds the request without sending it,
-   `CheckDomain`, which checks the host against the allowed domains, and `CheckCallerTimeout`, which compares `scheduleToCloseSeconds` with the caller's remaining
-   timeout from the `operation-timeout` header. Any of them failing returns a `BAD_REQUEST` handler
+   `CheckDomain`, which checks the host against the allowed domains, and `ScheduleToClose`, which
+   works out how long the call may take from the caller's remaining time in the
+   `operation-timeout` header. Any of them failing returns a `BAD_REQUEST` handler
    error with an `InvalidRequest` cause. Otherwise it starts `SendRequest` as a **standalone
    activity** with `temporalnexus.StartActivity`, using `ActivityOptions`: the ID
    `http-<Nexus request ID>`, so a retried start reaches the same activity;
-   `StartToCloseTimeout` 60 seconds; `ScheduleToCloseTimeout` from `scheduleToCloseSeconds`; and a
+   `StartToCloseTimeout` 60 seconds; `ScheduleToCloseTimeout` from `ScheduleToClose`; and a
    retry policy with no attempt limit. The operation returns at once. There is no workflow on the
    connector's side.
 
@@ -609,9 +616,9 @@ make ci          # vet, workflowcheck, lint (golangci-lint) and the tests, as CI
   rate-limit cache, API keys, redirects, redaction, and validation.
 - `testcaller/e2e_test.go` starts a dev server with the `temporal` CLI, creates both namespaces and
   the endpoint, runs the connector and the test caller, and makes requests across the namespaces:
-  a success, a retried 503, three 503s backing off 1s, 2s, then 4s, retries stopping at
-  `scheduleToCloseSeconds`, a 404 with its response, a request that outlasts the caller's timeout,
-  and an invalid request. It is skipped if `temporal` isn't on the `PATH`.
+  a success, a retried 503, three 503s backing off 1s, 2s, then 4s, retries stopping before the
+  caller's timeout with the connector's error, a 404 with its response, a caller timeout too short
+  for one attempt, an invalid request, and a domain that isn't allowed. It is skipped if `temporal` isn't on the `PATH`.
 
 ### Changing the contract
 
@@ -661,8 +668,8 @@ This works only for code that calls `SendRequest` in-process. A workflow that ca
 connector's Nexus operation can't reach the connector's rate-limit cache.
 
 Everything else a shell needs is exported too: `New` (the activities, with their rate-limit
-cache), `Validate`, `CheckDomain` and `CheckCallerTimeout` (the checks the operation makes before starting the
-activity), and `ActivityOptions`. The OpenAPI proof of concept
+cache), `Validate`, `CheckDomain` and `ScheduleToClose` (the checks the operation makes before
+starting the activity), and `ActivityOptions`. The OpenAPI proof of concept
 ([nexus-connector-openapi](https://github.com/Evanthx/nexus-connector-openapi)) is a shell of this
 kind, generated rather than written by hand. Its activities call `SendRequest` in-process so they
 can decode the response into the operation's output type.

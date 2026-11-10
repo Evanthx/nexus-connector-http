@@ -23,7 +23,7 @@ func main() {
 	url := flag.String("url", "https://httpbin.org/get", "URL to request")
 	method := flag.String("method", "GET", "HTTP method")
 	body := flag.String("body", "", "Request body")
-	total := flag.Int64("schedule-to-close-seconds", 0, "How long to keep retrying, in seconds; 0 leaves it unset (25 hours)")
+	timeout := flag.Duration("timeout", 0, "The Nexus operation's timeout, such as 10m; the connector retries until shortly before it. 0 means none, so the connector's maximum applies (25h by default)")
 	flag.Parse()
 
 	m := httpapi.SendRequestInputMethod(*method)
@@ -33,9 +33,6 @@ func main() {
 		Method:      &m,
 		QueryParams: &httpapi.SendRequestInputQueryParams{AdditionalProperties: map[string]string{"source": "temporal-nexus"}},
 		Headers:     &httpapi.SendRequestInputHeaders{AdditionalProperties: headers},
-	}
-	if *total != 0 {
-		req.ScheduleToCloseSeconds = total
 	}
 	if *body != "" {
 		req.Body = body
@@ -55,7 +52,7 @@ func main() {
 	run, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID:        "http-testcaller-" + time.Now().Format("20060102150405"),
 		TaskQueue: testcaller.TaskQueue,
-	}, testcaller.CallerWorkflow, req)
+	}, testcaller.CallerWorkflow, req, *timeout)
 	if err != nil {
 		log.Fatalf("Failed to start the workflow: %v", err)
 	}

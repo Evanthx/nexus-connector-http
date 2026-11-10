@@ -47,7 +47,7 @@ func InvalidRequestError(err error) error {
 //     would make a Transient error wait as if they had been Transient too. That backoff now applies
 //     only when an attempt hits its StartToCloseTimeout, since the activity can't set a delay then.
 //     The policy has no MaximumAttempts, so the attempt number never ends the retries; only the
-//     ScheduleToCloseTimeout (scheduleToCloseSeconds) does.
+//     ScheduleToCloseTimeout (see ScheduleToClose) does.
 //   - The Transient count is how many Transient errors in a row there have been. Each attempt
 //     records it as heartbeat details, which the server hands to the next attempt. A RateLimited
 //     error resets it to 0, so the first Transient error after a rate limit waits backoffInitial

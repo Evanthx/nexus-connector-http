@@ -22,19 +22,9 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
-	"go.temporal.io/sdk/workflow"
 )
 
 const connectorNamespace = "http-connector"
-
-// oneHourCaller calls the operation as CallerWorkflow does, but with a fixed one-hour Nexus
-// operation timeout.
-func oneHourCaller(ctx workflow.Context, req httpapi.SendRequestInput) error {
-	c := workflow.NewNexusClient(testcaller.EndpointName, httpapi.HTTPService.ServiceName)
-	return c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
-		ScheduleToCloseTimeout: time.Hour,
-	}).Get(ctx, nil)
-}
 
 // TestEndToEnd runs the connector and the test caller in separate namespaces on a dev server, as
 // the README describes, and makes requests through the Nexus endpoint. It needs the temporal CLI
@@ -74,9 +64,8 @@ func TestEndToEnd(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// The httptest servers listen on 127.0.0.1; x.test is the never-sent request of the caller
-	// timeout case.
-	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1, x.test")
+	// The httptest servers listen on 127.0.0.1, so only they are allowed.
+	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1")
 	connectorWorker := worker.New(connectorClient, httpconnector.TaskQueue, worker.Options{})
 	require.NoError(t, httpconnector.Register(connectorWorker))
 	require.NoError(t, connectorWorker.Start())
@@ -87,17 +76,21 @@ func TestEndToEnd(t *testing.T) {
 	t.Cleanup(callerClient.Close)
 	callerWorker := worker.New(callerClient, testcaller.TaskQueue, worker.Options{})
 	callerWorker.RegisterWorkflow(testcaller.CallerWorkflow)
-	callerWorker.RegisterWorkflow(oneHourCaller)
 	require.NoError(t, callerWorker.Start())
 	t.Cleanup(callerWorker.Stop)
 
-	call := func(t *testing.T, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+	// callWithTimeout runs CallerWorkflow with a Nexus operation timeout; call, with none.
+	callWithTimeout := func(t *testing.T, req httpapi.SendRequestInput, timeout time.Duration) (httpapi.SendRequestOutput, error) {
 		t.Helper()
-		run, err := callerClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: testcaller.TaskQueue}, testcaller.CallerWorkflow, req)
+		run, err := callerClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: testcaller.TaskQueue}, testcaller.CallerWorkflow, req, timeout)
 		require.NoError(t, err)
 		var resp httpapi.SendRequestOutput
 		err = run.Get(ctx, &resp)
 		return resp, err
+	}
+	call := func(t *testing.T, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+		t.Helper()
+		return callWithTimeout(t, req, 0)
 	}
 
 	t.Run("success", func(t *testing.T) {
@@ -159,22 +152,22 @@ func TestEndToEnd(t *testing.T) {
 		}
 	})
 
-	t.Run("retries stop at the request's scheduleToCloseSeconds", func(t *testing.T) {
+	t.Run("retries stop before the caller's timeout, with the connector's error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
 		defer srv.Close()
 
+		// The connector retries for 15s - 10s margin = 5s, then fails with the last 503. Had it
+		// kept retrying, the caller would time out at 15s with no ApplicationError.
+		const timeout = 15 * time.Second
 		start := time.Now()
-		_, err := call(t, httpapi.SendRequestInput{
-			URL:                    srv.URL,
-			TimeoutSeconds:         new(int64(1)),
-			ScheduleToCloseSeconds: new(int64(3)),
-		})
+		_, err := callWithTimeout(t, httpapi.SendRequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))}, timeout)
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeTransient, appErr.Type())
-		require.Less(t, time.Since(start), 30*time.Second, "the default 10 minutes would still be retrying")
+		require.Contains(t, appErr.Message(), "returned status 503")
+		require.Less(t, time.Since(start), timeout)
 	})
 
 	t.Run("client error reaches the caller with the response", func(t *testing.T) {
@@ -199,18 +192,16 @@ func TestEndToEnd(t *testing.T) {
 		require.Equal(t, int32(1), hits.Load(), "a client error must not be retried")
 	})
 
-	t.Run("request that outlasts the caller's timeout is rejected", func(t *testing.T) {
-		run, err := callerClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: testcaller.TaskQueue}, oneHourCaller,
-			httpapi.SendRequestInput{URL: "https://x.test"}) // scheduleToCloseSeconds defaults to 25 hours
-		require.NoError(t, err)
-		err = run.Get(ctx, nil)
+	t.Run("caller timeout too short for one attempt is rejected", func(t *testing.T) {
+		// timeoutSeconds defaults to 30, plus the 10s margin, is more than 20s.
+		_, err := callWithTimeout(t, httpapi.SendRequestInput{URL: "http://127.0.0.1:1/never"}, 20*time.Second)
 		var handlerErr *nexus.HandlerError
 		require.ErrorAs(t, err, &handlerErr)
 		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
-		require.Contains(t, appErr.Message(), "scheduleToCloseSeconds is 90000 (25h0m0s), but the caller's Nexus operation times out in")
+		require.Contains(t, appErr.Message(), "which leaves no time for an attempt: it needs at least timeoutSeconds (30s) plus 10s")
 	})
 
 	t.Run("invalid request fails when the operation starts", func(t *testing.T) {

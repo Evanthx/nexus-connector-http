@@ -5,7 +5,7 @@ service has one operation, `sendRequest`. It takes a description of the request 
 headers, query parameters, auth, body) and returns the response (status, headers, body).
 
 Failures are `ApplicationError`s whose type is `InvalidRequest`, `ClientError`, `Transient` or
-`RateLimited`. `Transient` and `RateLimited` failures are retried for the request's
-`scheduleToCloseSeconds` (25 hours by default, and at most) before the operation completes. Your
-Nexus operation's timeout must be longer than `scheduleToCloseSeconds`, or the request is rejected
-with `InvalidRequest`.
+`RateLimited`. `Transient` and `RateLimited` failures are retried until 10 seconds before your
+Nexus operation times out, then the operation fails with the last error. With no timeout, or a
+longer one, retries stop after the connector's maximum (25 hours by default). A timeout too short
+for one attempt plus those 10 seconds is rejected with `InvalidRequest`.

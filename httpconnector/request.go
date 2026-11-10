@@ -28,27 +28,6 @@ func Validate(req httpapi.SendRequestInput) error {
 	return err
 }
 
-// CheckCallerTimeout reports an error if req's scheduleToCloseSeconds wouldn't end before the
-// caller's Nexus operation times out. Otherwise the caller would time out while the connector kept
-// trying, and get a timeout instead of the connector's error. operationTimeout is the
-// operation-timeout header, which the caller's server sets to the time the operation has left;
-// empty means the operation has no timeout.
-func CheckCallerTimeout(req httpapi.SendRequestInput, operationTimeout string) error {
-	if operationTimeout == "" {
-		return nil
-	}
-	left, err := time.ParseDuration(operationTimeout)
-	if err != nil {
-		return fmt.Errorf("can't read the operation-timeout header %q: %w", operationTimeout, err)
-	}
-	if total := ScheduleToClose(req); total >= left {
-		return fmt.Errorf("scheduleToCloseSeconds is %d (%s), but the caller's Nexus operation times out in %s: "+
-			"set scheduleToCloseSeconds lower than that, or give the operation a longer timeout",
-			req.ScheduleToCloseSecondsOrDefault(), total, left.Round(time.Second))
-	}
-	return nil
-}
-
 // build turns req into an HTTP request, resolving any API key from the worker's environment. An
 // error means the request can't be made as given.
 func build(ctx context.Context, req httpapi.SendRequestInput) (*http.Request, error) {
@@ -92,17 +71,11 @@ func parseURL(rawURL string) (*url.URL, error) {
 	return u, nil
 }
 
-// checkTimeouts checks that req's timeoutSeconds fits in one attempt, and its
-// scheduleToCloseSeconds is from timeoutSeconds to maxScheduleToClose.
+// checkTimeouts checks that req's timeoutSeconds fits in one attempt.
 func checkTimeouts(req httpapi.SendRequestInput) error {
 	maxSecs := int64(attemptTimeout / time.Second)
-	secs := req.TimeoutSecondsOrDefault()
-	if secs < 1 || secs > maxSecs {
+	if secs := req.TimeoutSecondsOrDefault(); secs < 1 || secs > maxSecs {
 		return fmt.Errorf("timeoutSeconds %d must be between 1 and %d", secs, maxSecs)
-	}
-	maxTotal := int64(maxScheduleToClose / time.Second)
-	if total := req.ScheduleToCloseSecondsOrDefault(); total < secs || total > maxTotal {
-		return fmt.Errorf("scheduleToCloseSeconds %d must be between timeoutSeconds (%d) and %d", total, secs, maxTotal)
 	}
 	return nil
 }

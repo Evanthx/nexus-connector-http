@@ -64,11 +64,6 @@ type SendRequestInput struct {
 	Body *string `json:"body,omitempty"`
 	// TimeoutSeconds Timeout for one attempt, in seconds, from 1 to 60
 	TimeoutSeconds *int64 `json:"timeoutSeconds,omitempty"`
-	// ScheduleToCloseSeconds Total time for every attempt and every wait between them, in
-	// seconds, from timeoutSeconds to 90000 (25 hours, the default). Once it is up, the
-	// call fails with its last error. It must end before the caller's Nexus operation
-	// times out, or the request is rejected
-	ScheduleToCloseSeconds *int64 `json:"scheduleToCloseSeconds,omitempty"`
 }
 
 // MethodOrDefault returns Method when set, else the schema default.
@@ -85,14 +80,6 @@ func (m SendRequestInput) TimeoutSecondsOrDefault() int64 {
 		return *m.TimeoutSeconds
 	}
 	return 30
-}
-
-// ScheduleToCloseSecondsOrDefault returns ScheduleToCloseSeconds when set, else the schema default.
-func (m SendRequestInput) ScheduleToCloseSecondsOrDefault() int64 {
-	if m.ScheduleToCloseSeconds != nil {
-		return *m.ScheduleToCloseSeconds
-	}
-	return 90000
 }
 
 // Validate checks m against every constraint and returns a PayloadValidationError
@@ -115,9 +102,6 @@ func (m SendRequestInput) Validate() error {
 	if m.TimeoutSeconds != nil && (*m.TimeoutSeconds < -integerCap || *m.TimeoutSeconds > integerCap) {
 		errs = append(errs, Violation{"timeoutSeconds", "exceeds ±(2^53-1) integer cap"})
 	}
-	if m.ScheduleToCloseSeconds != nil && (*m.ScheduleToCloseSeconds < -integerCap || *m.ScheduleToCloseSeconds > integerCap) {
-		errs = append(errs, Violation{"scheduleToCloseSeconds", "exceeds ±(2^53-1) integer cap"})
-	}
 	if len(errs) > 0 {
 		return newPayloadValidationError(errs)
 	}
@@ -134,7 +118,7 @@ func (m *SendRequestInput) UnmarshalJSON(data []byte) error {
 	var errs []Violation
 	for k := range all {
 		switch k {
-		case "url", "method", "headers", "queryParams", "username", "apiKeyEnvVar", "apiKeyParam", "body", "timeoutSeconds", "scheduleToCloseSeconds":
+		case "url", "method", "headers", "queryParams", "username", "apiKeyEnvVar", "apiKeyParam", "body", "timeoutSeconds":
 		default:
 			errs = append(errs, Violation{memberPath(k), "unknown field"})
 		}
@@ -195,9 +179,6 @@ func (m *SendRequestInput) UnmarshalJSON(data []byte) error {
 	if v, ok := parseIntegerField(get("timeoutSeconds"), "timeoutSeconds", false, false, &errs); ok {
 		m.TimeoutSeconds = &v
 	}
-	if v, ok := parseIntegerField(get("scheduleToCloseSeconds"), "scheduleToCloseSeconds", false, false, &errs); ok {
-		m.ScheduleToCloseSeconds = &v
-	}
 	if len(errs) > 0 {
 		return newPayloadValidationError(errs)
 	}
@@ -234,9 +215,6 @@ func (m SendRequestInput) MarshalJSON() ([]byte, error) {
 	}
 	if m.TimeoutSeconds != nil {
 		marshalField(out, "timeoutSeconds", *m.TimeoutSeconds, &errs)
-	}
-	if m.ScheduleToCloseSeconds != nil {
-		marshalField(out, "scheduleToCloseSeconds", *m.ScheduleToCloseSeconds, &errs)
 	}
 	if len(errs) > 0 {
 		return nil, newPayloadValidationError(errs)

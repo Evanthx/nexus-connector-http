@@ -20,13 +20,19 @@ const defaultRateLimitWindow = 5 * time.Minute
 // waiting requests all retry when it ends, and if the first one's 429 comes back before the
 // others check, they wait another window. Requests that check at the same moment all go out.
 func rateLimitWindow() (time.Duration, error) {
-	v := os.Getenv(RateLimitMinutesEnvVar)
+	return envMinutes(RateLimitMinutesEnvVar, defaultRateLimitWindow)
+}
+
+// envMinutes reads the environment variable name as a whole number of minutes, at least 1, or
+// def if it is unset or empty.
+func envMinutes(name string, def time.Duration) (time.Duration, error) {
+	v := os.Getenv(name)
 	if v == "" {
-		return defaultRateLimitWindow, nil
+		return def, nil
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
-		return 0, fmt.Errorf("%s must be a whole number of minutes, at least 1; got %q", RateLimitMinutesEnvVar, v)
+		return 0, fmt.Errorf("%s must be a whole number of minutes, at least 1; got %q", name, v)
 	}
 	return time.Duration(n) * time.Minute, nil
 }

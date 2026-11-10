@@ -32,13 +32,14 @@ const TaskQueue = "nexus-connector-http"
 // HTTPActivities is the SendRequest activity plus the rate-limit cache it shares across calls.
 // Register one instance per worker, so every call on that worker shares the cache.
 type HTTPActivities struct {
-	lim     *limiter
-	domains []string // allowed domains; nil allows any host
+	lim      *limiter
+	domains  []string      // allowed domains; nil allows any host
+	maxTotal time.Duration // the longest a call may take in all
 }
 
 // New returns HTTPActivities with an empty rate-limit cache, whose window it reads from
-// RateLimitMinutesEnvVar, and the allowed domains from AllowedDomainsEnvVar. An invalid value
-// of either is an error.
+// RateLimitMinutesEnvVar, the allowed domains from AllowedDomainsEnvVar, and the longest a call
+// may take from MaxDurationEnvVar. An invalid value of any of them is an error.
 func New() (*HTTPActivities, error) {
 	window, err := rateLimitWindow()
 	if err != nil {
@@ -48,24 +49,30 @@ func New() (*HTTPActivities, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxDuration, err := readMaxDuration()
+	if err != nil {
+		return nil, err
+	}
 	a := newWithWindow(window)
 	a.domains = domains
+	a.maxTotal = maxDuration
 	return a, nil
 }
 
 func newWithWindow(window time.Duration) *HTTPActivities {
-	return &HTTPActivities{lim: newLimiter(window)}
+	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration}
 }
 
 // Register registers the HTTPService Nexus service and the SendRequest activity its operation
 // starts on w. Both use one HTTPActivities, so every call on the worker shares one rate-limit
-// cache. It fails if the rate-limit window's or allowed domains' environment variable is invalid.
+// cache. It fails if one of the environment variables New reads is invalid.
 //
 // The sendRequest operation rejects a request that can't be made, whose host isn't an allowed
-// domain (see CheckDomain), or whose scheduleToCloseSeconds
-// outlasts the caller's operation timeout, with a BadRequest handler error, without starting an
-// activity; otherwise it starts SendRequest as a standalone activity. The activity ID comes from
-// the Nexus request ID, so a retried start of the same operation reaches the same activity.
+// domain (see CheckDomain), or for which the caller's Nexus operation has too little time left
+// (see ScheduleToClose), with a BadRequest handler error, without starting an activity; otherwise
+// it starts SendRequest as a standalone activity that ends shortly before the operation times out.
+// The activity ID comes from the Nexus request ID, so a retried start of the same operation
+// reaches the same activity.
 func Register(w worker.Registry) error {
 	a, err := New()
 	if err != nil {
@@ -83,8 +90,9 @@ func Register(w worker.Registry) error {
 			if err == nil {
 				err = a.CheckDomain(req.URL)
 			}
+			var total time.Duration
 			if err == nil {
-				err = CheckCallerTimeout(req, opts.Header.Get(nexus.HeaderOperationTimeout))
+				total, err = a.ScheduleToClose(req, opts.Header.Get(nexus.HeaderOperationTimeout))
 			}
 			if err != nil {
 				return temporalnexus.TemporalOperationResult[httpapi.SendRequestOutput]{}, &nexus.HandlerError{
@@ -92,7 +100,7 @@ func Register(w worker.Registry) error {
 					Cause: InvalidRequestError(err),
 				}
 			}
-			return temporalnexus.StartActivity(ctx, nc, ActivityOptions("http-"+opts.RequestID, req), a.SendRequest, req)
+			return temporalnexus.StartActivity(ctx, nc, ActivityOptions("http-"+opts.RequestID, total), a.SendRequest, req)
 		},
 	})
 	svc := nexus.NewService(httpapi.HTTPService.ServiceName)
@@ -119,26 +127,17 @@ const maxResponseBytes = 2 << 20
 // maxRedirects is how many redirects a request follows, as http.Client does by default.
 const maxRedirects = 10
 
-// maxScheduleToClose is the longest scheduleToCloseSeconds a request can set.
-const maxScheduleToClose = 25 * time.Hour
-
-// ScheduleToClose is how long the call for req may take in all, including every retry and
-// rate-limit wait: its scheduleToCloseSeconds, which build has checked. It must end before the
-// caller's Nexus operation times out (CheckCallerTimeout).
-func ScheduleToClose(req httpapi.SendRequestInput) time.Duration {
-	return time.Duration(req.ScheduleToCloseSecondsOrDefault()) * time.Second
-}
-
-// ActivityOptions are the options for starting SendRequest for req as a standalone activity with
-// the given ID. Transient errors retry with backoff (1s, doubling, at most 30s apart) and
+// ActivityOptions are the options for starting SendRequest as a standalone activity with the
+// given ID. Transient errors retry with backoff (1s, doubling, at most 30s apart) and
 // RateLimited errors after the rest of the rate-limit window. SendRequest sets each delay itself
 // (see transientError); the policy's backoff applies only when an attempt times out.
-// ScheduleToCloseTimeout bounds the whole call, including every retry and rate-limit wait.
-func ActivityOptions(id string, req httpapi.SendRequestInput) client.StartActivityOptions {
+// scheduleToClose, from ScheduleToClose, bounds the whole call, including every retry and
+// rate-limit wait.
+func ActivityOptions(id string, scheduleToClose time.Duration) client.StartActivityOptions {
 	return client.StartActivityOptions{
 		ID:                     id,
 		StartToCloseTimeout:    attemptTimeout,
-		ScheduleToCloseTimeout: ScheduleToClose(req),
+		ScheduleToCloseTimeout: scheduleToClose,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    backoffInitial,
 			BackoffCoefficient: 2.0,

@@ -434,43 +434,6 @@ func TestSendRequest_429LimitsOnlyItsOwnKey(t *testing.T) {
 	require.Equal(t, map[string]int{"bob /a": 1, "alice /a": 1, " /a": 2, "bob /b": 1}, hits)
 }
 
-// The activity's ScheduleToCloseTimeout is the request's scheduleToCloseSeconds, 25 hours if unset.
-func TestActivityOptions_ScheduleToClose(t *testing.T) {
-	require.Equal(t, 25*time.Hour, ActivityOptions("id", httpapi.SendRequestInput{URL: "https://x.test"}).ScheduleToCloseTimeout)
-	require.Equal(t, 10*time.Minute, ActivityOptions("id", httpapi.SendRequestInput{URL: "https://x.test", ScheduleToCloseSeconds: new(int64(600))}).ScheduleToCloseTimeout)
-}
-
-// A request whose scheduleToCloseSeconds doesn't end before the caller's Nexus operation times out
-// is rejected, with a message that says what to change.
-func TestCheckCallerTimeout(t *testing.T) {
-	tenMinutes := httpapi.SendRequestInput{URL: "https://x.test", ScheduleToCloseSeconds: new(int64(600))}
-	unset := httpapi.SendRequestInput{URL: "https://x.test"}
-	for _, tc := range []struct {
-		name    string
-		req     httpapi.SendRequestInput
-		header  string
-		wantErr string // empty: accepted
-	}{
-		{"no operation timeout", unset, "", ""},
-		{"operation outlasts the request", tenMinutes, "900000ms", ""},
-		{"operation outlasts the default", unset, "90060000ms", ""},
-		{"operation ends first", tenMinutes, "300000ms", "scheduleToCloseSeconds is 600 (10m0s), but the caller's Nexus operation times out in 5m0s"},
-		{"operation ends at the same time", tenMinutes, "600000ms", "times out in 10m0s"},
-		{"default outlasts the operation", unset, "3600000ms", "scheduleToCloseSeconds is 90000 (25h0m0s), but the caller's Nexus operation times out in 1h0m0s"},
-		{"unreadable header", tenMinutes, "soon", `can't read the operation-timeout header "soon"`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := CheckCallerTimeout(tc.req, tc.header)
-			if tc.wantErr == "" {
-				require.NoError(t, err)
-				return
-			}
-			require.ErrorContains(t, err, tc.wantErr)
-			require.NotContains(t, err.Error(), "s3cr3t")
-		})
-	}
-}
-
 // retryDelays runs one attempt per status against a server that answers with those statuses in
 // turn, the way the server retries the activity: each attempt gets the heartbeat details the one
 // before it recorded, and the rate-limit window has passed by the time it runs. It returns the
@@ -959,11 +922,6 @@ func TestValidate(t *testing.T) {
 		{"zero timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(0))}, "between 1 and 60"},
 		{"negative timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(-5))}, "between 1 and 60"},
 		{"timeout over the attempt limit", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(61))}, "between 1 and 60"},
-		{"total of 25 hours", httpapi.SendRequestInput{URL: "https://x.test", ScheduleToCloseSeconds: new(int64(90000))}, ""},
-		{"total equal to the attempt timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(20)), ScheduleToCloseSeconds: new(int64(20))}, ""},
-		{"total over 25 hours", httpapi.SendRequestInput{URL: "https://x.test", ScheduleToCloseSeconds: new(int64(90001))}, "between timeoutSeconds (30) and 90000"},
-		{"total shorter than the default attempt timeout", httpapi.SendRequestInput{URL: "https://x.test", ScheduleToCloseSeconds: new(int64(29))}, "between timeoutSeconds (30) and 90000"},
-		{"total shorter than a set attempt timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(45)), ScheduleToCloseSeconds: new(int64(40))}, "between timeoutSeconds (45) and 90000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Validate(tc.req)

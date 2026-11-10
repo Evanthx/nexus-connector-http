@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
-	"github.com/temporalio/nexus-connector-http/httpconnector"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -19,21 +18,18 @@ const (
 	EndpointName = "http-endpoint"
 )
 
-// CallerWorkflow sends req through the connector and returns the response. A failed call is a
-// NexusOperationError; errors.As finds the ApplicationError inside it, whose Type is one of the
-// httpconnector.ErrorType* values.
-func CallerWorkflow(ctx workflow.Context, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+// CallerWorkflow sends req through the connector and returns the response. timeout is the Nexus
+// operation's timeout: the connector keeps retrying until shortly before it, then fails with its
+// last error. Zero means no timeout, so the connector's maximum applies (25 hours by default). A
+// failed call is a NexusOperationError; errors.As finds the ApplicationError inside it, whose Type
+// is one of the httpconnector.ErrorType* values.
+func CallerWorkflow(ctx workflow.Context, req httpapi.SendRequestInput, timeout time.Duration) (httpapi.SendRequestOutput, error) {
 	logger := workflow.GetLogger(ctx)
 	c := workflow.NewNexusClient(EndpointName, httpapi.HTTPService.ServiceName)
 
 	var resp httpapi.SendRequestOutput
 	err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
-		// How long this workflow waits for the whole operation. It must be longer than the time
-		// the connector keeps retrying (the request's scheduleToCloseSeconds, which the connector
-		// uses as its activity's ScheduleToCloseTimeout, 25 hours if the request doesn't set it);
-		// otherwise the connector rejects the request. Five minutes more leaves room for the
-		// connector's last error to arrive.
-		ScheduleToCloseTimeout: httpconnector.ScheduleToClose(req) + 5*time.Minute,
+		ScheduleToCloseTimeout: timeout,
 	}).Get(ctx, &resp)
 	if err != nil {
 		logger.Error("HTTP request failed", "url", req.URL, "error", err)

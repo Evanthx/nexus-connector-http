@@ -58,10 +58,6 @@ $defs:
         type: integer
         default: 30
         description: "Timeout for one attempt, in seconds, from 1 to 60"
-      scheduleToCloseSeconds:
-        type: integer
-        default: 90000
-        description: "Total time for every attempt and every wait between them, in seconds, from timeoutSeconds to 90000 (25 hours, the default). Once it is up, the call fails with its last error. It must end before the caller's Nexus operation times out, or the request is rejected"
     required:
       - url
     additionalProperties: false

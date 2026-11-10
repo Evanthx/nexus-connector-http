@@ -68,6 +68,7 @@ its own.
    |---|---|
    | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as an `Authorization` header's whole value. |
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the worker exit at startup. |
+   | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | Optional. Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. Unset: any host. An entry that isn't a bare domain (scheme, port, path, `*`, empty) makes the worker exit at startup. |
    | `TEMPORAL_*` | As above. |
 
@@ -82,7 +83,7 @@ c := workflow.NewNexusClient("http-endpoint", httpapi.HTTPService.ServiceName)
 req := httpapi.SendRequestInput{URL: "https://api.example.com/items"}
 var resp httpapi.SendRequestOutput
 err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
-    ScheduleToCloseTimeout: httpconnector.ScheduleToClose(req) + 5*time.Minute,
+    ScheduleToCloseTimeout: time.Hour, // the connector retries until 10s before this
 }).Get(ctx, &resp)
 ```
 
@@ -92,7 +93,7 @@ The input as JSON:
 {"url": "https://api.example.com/items", "method": "POST",
  "headers": {"Content-Type": "application/json"}, "queryParams": {"source": "workflow"},
  "body": "{\"name\":\"widget\"}", "username": "reporting-bot",
- "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_ITEMS", "timeoutSeconds": 10, "scheduleToCloseSeconds": 3600}
+ "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_ITEMS", "timeoutSeconds": 10}
 ```
 
 | Field | Default | Notes |
@@ -105,24 +106,25 @@ The input as JSON:
 | `apiKeyParam` | none | Query parameter for the key. Unset: the key goes in `Authorization`, as `Bearer <key>`, or as the basic auth password with `username`. |
 | `username` | none | Basic auth user. Needs `apiKeyEnvVar`; can't be used with `apiKeyParam`. |
 | `timeoutSeconds` | 30 | One attempt, 1–60. |
-| `scheduleToCloseSeconds` | 90000 (25h) | Every attempt and wait, from `timeoutSeconds` to 90000. |
 
 Only a **2xx** is a result. Redirects are followed with Go's default policy (up to 10), except https → http.
 
 ## Rules that break things when ignored
 
-- **The caller's Nexus `ScheduleToCloseTimeout` must be longer than `scheduleToCloseSeconds`.**
-  Otherwise the operation fails at once with `InvalidRequest`. Use
-  `httpconnector.ScheduleToClose(req)` plus a margin, as the test caller does (+5m). A caller timeout
-  doesn't cancel the activity, so a shorter one would leave the connector retrying after the caller
-  gave up. Cancelling the caller's workflow does cancel it.
+- **The caller's Nexus timeout sets how long the connector retries**: until `callbackMargin` (10s)
+  before it, then the caller gets the connector's last error, not a timeout. The connector reads it
+  from the `operation-timeout` header, which the caller's server sets to the smaller of the
+  operation's remaining `ScheduleToCloseTimeout` and its `StartToCloseTimeout`. No header, or more
+  time than `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, means the maximum. A timeout under
+  `timeoutSeconds` + 10s fails at once with `InvalidRequest`. Cancelling the caller's workflow
+  cancels the activity.
 - **Never put a secret in the request.** Name a `HTTP_CONNECTOR_SECRET_*` variable in
   `apiKeyEnvVar`, or as the `Authorization` header's whole value (the variable then holds the whole
   header, scheme included, e.g. `Bearer ...` or `Basic <base64>` for Stripe-style auth). Any other
   `Authorization` value is sent and stored in workflow history as is. Export the variable in the
   worker's environment, not the caller's.
-- **A default request retries a failing endpoint for 25 hours.** Set `scheduleToCloseSeconds` low
-  when trying things out.
+- **A caller with no Nexus timeout retries a failing endpoint for 25 hours** (the default
+  maximum). Give the operation a short timeout when trying things out.
 - **The rate-limit cache is per worker and in memory.** A 429 holds back every request with the
   same key (URL plus username, else key variable name, else `Authorization` variable name, else
   `anon`) for the window, without sending them. Restarting the worker clears it; several workers
@@ -144,10 +146,10 @@ Only a **2xx** is a result. Redirects are followed with Go's default policy (up 
   ```bash
   go run ./testcaller/worker
   go run ./testcaller/starter                     # GET https://httpbin.org/get, prints the response
-  go run ./testcaller/starter -url https://httpbin.org/status/503 -schedule-to-close-seconds 600
+  go run ./testcaller/starter -url https://httpbin.org/status/503 -timeout 10m
   ```
 
-  Flags: `-url`, `-method`, `-body`, `-schedule-to-close-seconds`.
+  Flags: `-url`, `-method`, `-body`, `-timeout` (the Nexus operation's timeout; none by default).
 - A request being retried is a standalone activity in the connector's namespace, with ID
   `http-<Nexus request ID>`:
 
@@ -168,7 +170,7 @@ callers find it with `errors.As`. For an HTTP response, `Details` holds the `Sen
 
 | Type | Cause | Retried |
 |---|---|---|
-| `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, `scheduleToCloseSeconds` out of range or not shorter than the caller's timeout, invalid header name or value, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
+| `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, a caller timeout under `timeoutSeconds` + 10s, a host not in the allowed domains, invalid header name or value, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
 | `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
 | `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 1s×2 up to 30s |
 | `RateLimited` | 429, or the key is in the rate-limit cache. | After the window |
@@ -200,10 +202,10 @@ go test -short ./...                                         # skip the end-to-e
   `…OrDefault()` accessors. The generated `MarshalJSON`/`UnmarshalJSON` validate against the
   contract.
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
-  `ScheduleToClose`, the `ErrorType*` constants and `AllowedDomainsEnvVar`. `New`,
-  `HTTPActivities`, `ApplyStatus`, `Validate`, `CheckDomain`, `CheckCallerTimeout`,
-  `ActivityOptions`, `RateLimitKey`, `InvalidRequestError`, `SecretEnvPrefix` and
-  `RateLimitMinutesEnvVar` are exported on purpose, though only the package uses them: they are
+  the `ErrorType*` constants and `AllowedDomainsEnvVar`. `New`, `HTTPActivities`, `ApplyStatus`,
+  `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
+  `InvalidRequestError`, `SecretEnvPrefix`, `RateLimitMinutesEnvVar` and `MaxDurationEnvVar` are
+  exported on purpose, though only the package uses them: they are
   the connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
 - `Register` makes one `HTTPActivities` for both the service and the activity registration, so one
@@ -211,7 +213,6 @@ go test -short ./...                                         # skip the end-to-e
 - A secret value must never enter the request, history, the rate-limit key, error messages, or
   logs. Any new place a response or error text reaches the caller goes through `redact` or
   `redactResponse`.
-- The test caller's Nexus timeout must stay above the activity's ScheduleToClose.
 - For a test that guards a fix, revert the fix and confirm the test fails before calling it done.
 
 ### How the code works
@@ -223,14 +224,13 @@ go test -short ./...                                         # skip the end-to-e
     rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
     whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
     error type); `checkRedirect`; redaction.
-  - The operation validates first (`Validate`, then `CheckDomain`, then `CheckCallerTimeout`
-    against the caller's remaining time from the `operation-timeout` header) and returns a `BadRequest` handler error
-    (cause: an `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
-    `SendRequest` with `ActivityOptions(id, req)`. Activity ID is `"http-" + Nexus request ID`, so a
+  - The operation validates first (`Validate`, then `CheckDomain`, then `ScheduleToClose` from
+    the `operation-timeout` header) and returns a `BadRequest` handler error (cause: an
+    `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
+    `SendRequest` with `ActivityOptions(id, total)`. Activity ID is `"http-" + Nexus request ID`, so a
     retried Nexus start reaches the same activity.
   - `ActivityOptions`: StartToClose `attemptTimeout` 60s, which also caps `timeoutSeconds`;
-    ScheduleToClose from `ScheduleToClose(req)` (`scheduleToCloseSeconds`, default 25h, from
-    `timeoutSeconds` up to `maxScheduleToClose` 25h, checked in `build`); no attempt limit; policy
+    ScheduleToClose from `ScheduleToClose`; no attempt limit; policy
     backoff 1s×2 up to 30s, which now applies only to attempt timeouts.
   - `request.go`: `build`, in steps `parseURL`, `checkTimeouts`, `setQuery` (query parameters, a
     query API key, and the `username`/`apiKeyParam` check), `setHeaders` (headers, the
@@ -244,9 +244,15 @@ go test -short ./...                                         # skip the end-to-e
     any host); `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
     operation and again by `SendRequest` before sending. Matches the lower-cased host without port
     or trailing dot, exactly or as a subdomain at a dot boundary.
+  - `timeout.go`: `MaxDurationEnvVar` (default 25h, read by `New()` into
+    `HTTPActivities.maxTotal`, exported as `MaxDuration()`; there is always a maximum), `callbackMargin` (10s), and
+    `ScheduleToClose(req, header)`: no header → the maximum; else header − margin, capped at the
+    maximum, or an error if under `timeoutSeconds`. The server rewrites the header at dispatch, so
+    queue time is already subtracted.
   - `ratelimiter.go`: the `limiter`, owned by `HTTPActivities`. A 429 marks the key; while marked,
     `SendRequest` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
-    entries. It takes an explicit `now`. The window is read by `httpconnector.New()`.
+    entries. It takes an explicit `now`. The window is read by `httpconnector.New()`, through
+    `envMinutes`, which `MaxDurationEnvVar` shares.
 - Secrets: `redact` replaces each secret from `secrets(req)` (including an `Authorization`
   variable's credentials without the scheme, and the base64 `user:key` for basic auth) raw,
   URL-escaped, Go-quoted and JSON-escaped, in transport and body-read errors and, through
@@ -258,7 +264,8 @@ go test -short ./...                                         # skip the end-to-e
 - Non-2xx errors carry the `SendRequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.
 - `cmd/worker` — the connector's process: `envconfig`, `worker.New` on `TaskQueue`, `Register`.
-- `testcaller/` — test only: `CallerWorkflow`, a worker, a starter, and the end-to-end test.
+- `testcaller/` — test only: `CallerWorkflow(req, timeout)` (the Nexus operation timeout; 0 for
+  none), a worker, a starter, and the end-to-end test.
 
 ### Tests
 
@@ -269,6 +276,7 @@ go test -short ./...                                         # skip the end-to-e
 - `testcaller/e2e_test.go` — starts a dev server with the `temporal` CLI (skipped if it isn't on
   the PATH, or with `-short`), creates both namespaces and the endpoint, runs both workers
   in-process, and runs `CallerWorkflow` against `httptest` servers: success, a retried 503,
-  retries stopping at a short `scheduleToCloseSeconds`, rejection when it outlasts the caller's
-  one-hour timeout (`oneHourCaller`), a 404 `ClientError` with its response, and an
-  `InvalidRequest` rejected at start.
+  retries stopping before a 15s caller timeout with the connector's error, a caller timeout too
+  short for one attempt rejected at start, a 404 `ClientError` with its response, an
+  `InvalidRequest` and a domain not allowed, both rejected at start. It sets the allowed domains
+  to `127.0.0.1`.
