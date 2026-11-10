@@ -32,17 +32,25 @@ const TaskQueue = "nexus-connector-http"
 // HTTPActivities is the SendRequest activity plus the rate-limit cache it shares across calls.
 // Register one instance per worker, so every call on that worker shares the cache.
 type HTTPActivities struct {
-	lim *limiter
+	lim     *limiter
+	domains []string // allowed domains; nil allows any host
 }
 
 // New returns HTTPActivities with an empty rate-limit cache, whose window it reads from
-// RateLimitMinutesEnvVar. An invalid value is an error.
+// RateLimitMinutesEnvVar, and the allowed domains from AllowedDomainsEnvVar. An invalid value
+// of either is an error.
 func New() (*HTTPActivities, error) {
 	window, err := rateLimitWindow()
 	if err != nil {
 		return nil, err
 	}
-	return newWithWindow(window), nil
+	domains, err := allowedDomains()
+	if err != nil {
+		return nil, err
+	}
+	a := newWithWindow(window)
+	a.domains = domains
+	return a, nil
 }
 
 func newWithWindow(window time.Duration) *HTTPActivities {
@@ -51,9 +59,10 @@ func newWithWindow(window time.Duration) *HTTPActivities {
 
 // Register registers the HTTPService Nexus service and the SendRequest activity its operation
 // starts on w. Both use one HTTPActivities, so every call on the worker shares one rate-limit
-// cache. It fails if the rate-limit window's environment variable is invalid.
+// cache. It fails if the rate-limit window's or allowed domains' environment variable is invalid.
 //
-// The sendRequest operation rejects a request that can't be made, or whose scheduleToCloseSeconds
+// The sendRequest operation rejects a request that can't be made, whose host isn't an allowed
+// domain (see CheckDomain), or whose scheduleToCloseSeconds
 // outlasts the caller's operation timeout, with a BadRequest handler error, without starting an
 // activity; otherwise it starts SendRequest as a standalone activity. The activity ID comes from
 // the Nexus request ID, so a retried start of the same operation reaches the same activity.
@@ -71,6 +80,9 @@ func Register(w worker.Registry) error {
 			opts temporalnexus.StartTemporalOperationOptions,
 		) (temporalnexus.TemporalOperationResult[httpapi.SendRequestOutput], error) {
 			err := Validate(req)
+			if err == nil {
+				err = a.CheckDomain(req.URL)
+			}
 			if err == nil {
 				err = CheckCallerTimeout(req, opts.Header.Get(nexus.HeaderOperationTimeout))
 			}
@@ -157,7 +169,8 @@ func categorizeError(status int) string {
 
 // SendRequest makes one HTTP attempt per activity attempt:
 //
-//   - A request that can't be made fails with InvalidRequest, without being sent.
+//   - A request that can't be made, or whose host isn't an allowed domain, fails with
+//     InvalidRequest, without being sent.
 //   - If another call for the same rate-limit key got a 429 within the last window, it fails with
 //     RateLimited without being sent, and the next attempt waits for the rest of the window.
 //   - Otherwise it is sent, and the response's status decides the result (see ApplyStatus). 2xx
@@ -168,6 +181,9 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 	logger := activity.GetLogger(ctx)
 
 	httpReq, err := build(ctx, req)
+	if err == nil {
+		err = a.CheckDomain(req.URL)
+	}
 	if err != nil {
 		return httpapi.SendRequestOutput{}, InvalidRequestError(err)
 	}

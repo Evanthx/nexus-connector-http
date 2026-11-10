@@ -74,6 +74,9 @@ func TestEndToEnd(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// The httptest servers listen on 127.0.0.1; x.test is the never-sent request of the caller
+	// timeout case.
+	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1, x.test")
 	connectorWorker := worker.New(connectorClient, httpconnector.TaskQueue, worker.Options{})
 	require.NoError(t, httpconnector.Register(connectorWorker))
 	require.NoError(t, connectorWorker.Start())
@@ -219,5 +222,16 @@ func TestEndToEnd(t *testing.T) {
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
 		require.Contains(t, appErr.Message(), "scheme must be http or https")
+	})
+
+	t.Run("domain not allowed fails when the operation starts", func(t *testing.T) {
+		_, err := call(t, httpapi.SendRequestInput{URL: "https://example.com/file"})
+		var handlerErr *nexus.HandlerError
+		require.ErrorAs(t, err, &handlerErr)
+		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)
+		var appErr *temporal.ApplicationError
+		require.ErrorAs(t, err, &appErr)
+		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
+		require.Contains(t, appErr.Message(), `domain "example.com" is not on the connector's list of allowed domains`)
 	})
 }

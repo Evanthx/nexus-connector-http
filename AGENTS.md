@@ -68,6 +68,7 @@ its own.
    |---|---|
    | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as an `Authorization` header's whole value. |
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the worker exit at startup. |
+   | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | Optional. Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. Unset: any host. An entry that isn't a bare domain (scheme, port, path, `*`, empty) makes the worker exit at startup. |
    | `TEMPORAL_*` | As above. |
 
 ## Call it
@@ -126,8 +127,10 @@ Only a **2xx** is a result. Redirects are followed with Go's default policy (up 
   same key (URL plus username, else key variable name, else `Authorization` variable name, else
   `anon`) for the window, without sending them. Restarting the worker clears it; several workers
   each probe on their own.
-- **The connector calls any URL**, including ones on its own network. Tell the user if that matters
-  where it runs; there is no allowlist.
+- **Without `HTTP_CONNECTOR_ALLOWED_DOMAINS`, the connector calls any URL**, including ones on its
+  own network. Tell the user if that matters where it runs. The list checks the request's URL
+  only: redirects are followed wherever they go, so an open redirect on an allowed domain reaches
+  any host. It checks names, not the addresses they resolve to.
 - **Body limit 2 MiB**, and the response must fit Temporal's payload limit (2 MB by default).
 
 ## Check it is working
@@ -197,9 +200,10 @@ go test -short ./...                                         # skip the end-to-e
   `…OrDefault()` accessors. The generated `MarshalJSON`/`UnmarshalJSON` validate against the
   contract.
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
-  `ScheduleToClose` and the `ErrorType*` constants. `New`, `HTTPActivities`, `ApplyStatus`, `Validate`,
-  `CheckCallerTimeout`, `ActivityOptions`, `RateLimitKey`, `InvalidRequestError`, `SecretEnvPrefix`
-  and `RateLimitMinutesEnvVar` are exported on purpose, though only the package uses them: they are
+  `ScheduleToClose`, the `ErrorType*` constants and `AllowedDomainsEnvVar`. `New`,
+  `HTTPActivities`, `ApplyStatus`, `Validate`, `CheckDomain`, `CheckCallerTimeout`,
+  `ActivityOptions`, `RateLimitKey`, `InvalidRequestError`, `SecretEnvPrefix` and
+  `RateLimitMinutesEnvVar` are exported on purpose, though only the package uses them: they are
   the connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
 - `Register` makes one `HTTPActivities` for both the service and the activity registration, so one
@@ -219,8 +223,8 @@ go test -short ./...                                         # skip the end-to-e
     rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
     whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
     error type); `checkRedirect`; redaction.
-  - The operation validates first (`Validate`, then `CheckCallerTimeout` against the caller's
-    remaining time from the `operation-timeout` header) and returns a `BadRequest` handler error
+  - The operation validates first (`Validate`, then `CheckDomain`, then `CheckCallerTimeout`
+    against the caller's remaining time from the `operation-timeout` header) and returns a `BadRequest` handler error
     (cause: an `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
     `SendRequest` with `ActivityOptions(id, req)`. Activity ID is `"http-" + Nexus request ID`, so a
     retried Nexus start reaches the same activity.
@@ -236,6 +240,10 @@ go test -short ./...                                         # skip the end-to-e
     `NextRetryDelay` 1s×2 up to 30s, counting only Transient failures in a row; the count passes
     between attempts as heartbeat details, and a RateLimited error resets it to 0.
     `rateLimitedError` waits the rest of the window. There is no loop in the activity.
+  - `allowlist.go`: `AllowedDomainsEnvVar`, read by `New()` into `HTTPActivities.domains` (nil =
+    any host); `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
+    operation and again by `SendRequest` before sending. Matches the lower-cased host without port
+    or trailing dot, exactly or as a subdomain at a dot boundary.
   - `ratelimiter.go`: the `limiter`, owned by `HTTPActivities`. A 429 marks the key; while marked,
     `SendRequest` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
     entries. It takes an explicit `now`. The window is read by `httpconnector.New()`.

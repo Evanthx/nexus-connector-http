@@ -178,7 +178,7 @@ Every failure is an `ApplicationError` whose type is one of these:
 
 | Type | When | Retried |
 |---|---|---|
-| `InvalidRequest` | The request can't be made: a bad URL, a `timeoutSeconds` outside 1–60, a `scheduleToCloseSeconds` out of range or not shorter than the caller's operation timeout, a header name or value that isn't valid HTTP (such as one with a newline), or a bad or missing API key variable. It is never sent. | No |
+| `InvalidRequest` | The request can't be made: a bad URL, a `timeoutSeconds` outside 1–60, a `scheduleToCloseSeconds` out of range or not shorter than the caller's operation timeout, a header name or value that isn't valid HTTP (such as one with a newline), a bad or missing API key variable, or a host that isn't an [allowed domain](#allowed-domains). It is never sent. | No |
 | `ClientError` | The endpoint answered with a status that sending the same request again won't change: any 4xx not listed under `Transient` or `RateLimited`, 501, 505, 511, or a 3xx that wasn't followed (such as a 304, or a redirect from `https` to `http`). Also a response body over 2 MiB; the connector stops reading after 2 MiB. Also a TLS certificate that doesn't verify (expired, wrong host, or an unknown authority). | No |
 | `Transient` | The endpoint answered 408, 409, 420, 421, 423, 424, 425, or any 5xx except 501, 505 and 511, or the request timed out or failed on the network. | With backoff: 1s, doubling, at most 30s apart |
 | `RateLimited` | The endpoint answered 429, or another request with the same rate-limit key did within the [rate-limit window](#rate-limiting). | After the rest of that window |
@@ -339,8 +339,27 @@ The connector also keeps keys from leaking on the way back:
 - **Response size.** The whole body is returned in the activity's result, so a body over 2 MiB
   fails with `ClientError`, and a smaller one near Temporal's payload size limit (2 MB by
   default) can't be returned.
-- **Any URL.** The connector will call any `http` or `https` URL, including addresses on its own
-  network. Run it where that is acceptable, or add an allowlist.
+- **Any URL, unless limited.** Without `HTTP_CONNECTOR_ALLOWED_DOMAINS`, the connector will call
+  any `http` or `https` URL, including addresses on its own network. Run it where that is
+  acceptable, or set the allowed domains.
+
+#### Allowed domains
+
+Set `HTTP_CONNECTOR_ALLOWED_DOMAINS` on the connector worker to a comma-separated list of domains,
+such as `temporal.io, google.com, stripe.com`. Spaces are ignored, and case doesn't matter. A
+domain allows itself and its subdomains: `temporal.io` allows `docs.temporal.io`, but not
+`eviltemporal.io`. An IPv4 address, such as `10.0.0.5`, allows only itself. Each entry must be a
+bare domain, with no scheme, port, path or wildcard; an invalid entry, or an empty one, makes the
+worker exit at startup. Unset or empty, any host is allowed.
+
+A request to any other host fails with `InvalidRequest`, saying
+`domain "example.com" is not on the connector's list of allowed domains`, and is never sent.
+
+The list limits the URL a request names, not where it ends up:
+
+- **Redirects are followed** wherever they go (except https to http), so an allowed site that
+  redirects to any URL it is given, such as a search engine's link redirector, reaches any host.
+- **Names, not addresses.** An allowed name whose DNS resolves to an internal address is called.
 
 ### Run the connector
 
@@ -400,6 +419,7 @@ On the connector worker (`cmd/worker`):
 |---|---|
 | `HTTP_CONNECTOR_SECRET_*` | API keys that requests can name in `apiKeyEnvVar`, or as an `Authorization` header's value. |
 | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | How long a key stays rate-limited after a 429, in whole minutes. Defaults to 5. |
+| `HTTP_CONNECTOR_ALLOWED_DOMAINS` | The only domains requests can go to, comma-separated, such as `temporal.io, api.stripe.com`. Unset, any host. See [Allowed domains](#allowed-domains). |
 | `TEMPORAL_*` | How to connect to Temporal; see below. |
 
 Callers' workers need only their own `TEMPORAL_*` settings.
@@ -532,15 +552,16 @@ endpoint's description.
    calls `httpconnector.Register`. `Register` makes one `HTTPActivities`, which owns the
    rate-limit cache, and registers both the `HTTPService` Nexus service and its `SendRequest`
    activity with it, so every call on the worker shares one cache. It reads
-   `HTTP_CONNECTOR_RATE_LIMIT_MINUTES`, and fails on an invalid value.
+   `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` and `HTTP_CONNECTOR_ALLOWED_DOMAINS`, and fails on an
+   invalid value.
 
 2. **Decoding.** The caller's request arrives through the endpoint. The generated `UnmarshalJSON`
    decodes it into a `SendRequestInput`, rejecting anything the contract doesn't allow.
 
 3. **The operation starts an activity.** The `sendRequest` operation, defined inside `Register`,
-   does no HTTP work. It calls `Validate`, which builds the request without sending it, and
-   `CheckCallerTimeout`, which compares `scheduleToCloseSeconds` with the caller's remaining
-   timeout from the `operation-timeout` header. Either failing returns a `BAD_REQUEST` handler
+   does no HTTP work. It calls `Validate`, which builds the request without sending it,
+   `CheckDomain`, which checks the host against the allowed domains, and `CheckCallerTimeout`, which compares `scheduleToCloseSeconds` with the caller's remaining
+   timeout from the `operation-timeout` header. Any of them failing returns a `BAD_REQUEST` handler
    error with an `InvalidRequest` cause. Otherwise it starts `SendRequest` as a **standalone
    activity** with `temporalnexus.StartActivity`, using `ActivityOptions`: the ID
    `http-<Nexus request ID>`, so a retried start reaches the same activity;
@@ -640,7 +661,7 @@ This works only for code that calls `SendRequest` in-process. A workflow that ca
 connector's Nexus operation can't reach the connector's rate-limit cache.
 
 Everything else a shell needs is exported too: `New` (the activities, with their rate-limit
-cache), `Validate` and `CheckCallerTimeout` (the checks the operation makes before starting the
+cache), `Validate`, `CheckDomain` and `CheckCallerTimeout` (the checks the operation makes before starting the
 activity), and `ActivityOptions`. The OpenAPI proof of concept
 ([nexus-connector-openapi](https://github.com/Evanthx/nexus-connector-openapi)) is a shell of this
 kind, generated rather than written by hand. Its activities call `SendRequest` in-process so they
