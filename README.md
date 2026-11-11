@@ -1,6 +1,7 @@
 ![Nexus Connectors](docs/images/NexusConnectors.webp)
 
-# nexus-connector-http
+
+# Outbound HTTP Connector
 
 ## What are Nexus Connectors?
 
@@ -13,7 +14,7 @@ sending an invoice. Because callers reach the connector through Nexus, it is wri
 called from any language Temporal supports, with [typed clients](docs/clients.md) generated from
 the connector's contract.
 
-Connectors lower the cost of adopting Temporal. Teams arriving from low-code platforms that ship
+Connectors lower the cost of adopting Temporal. Teams arriving from platforms that ship
 hundreds of prebuilt connectors can reach the systems they already depend on without building
 each integration by hand, and a service moving into Temporal can keep talking to the services
 around it over the Kafka topics or HTTP calls they already use. Running a connector behind a Nexus
@@ -21,7 +22,7 @@ endpoint also keeps credentials in one place: the connector holds the keys, and 
 namespaces may call which endpoint, such as a read-only endpoint for one team and a read-write one
 for another, following the principle of least privilege.
 
-## What it is
+## What is the Outbound HTTP Connector?
 
 **Durable HTTP calls, ready to use.** The HTTP connector is a Temporal worker that makes HTTP
 requests for your workflows. A workflow describes a request (URL, method, headers, body, and which
@@ -67,7 +68,7 @@ Use it when:
   out API keys.
 
 It is not a fit when a response is larger than 2 MiB, or when you need streaming responses. An API
-that reports errors or rate limits inside a `200 OK` needs a small wrapper; see
+that does not follow the expected standards (for example, one that returns a 200 success with a body that reports an error) needs a small wrapper; see
 [APIs that don't follow the standard](docs/how-it-works.md#apis-that-dont-follow-the-standard).
 
 ## FAQ
