@@ -9,7 +9,7 @@ import (
 // AllowedDomainsEnvVar names the environment variable on the connector worker that limits which
 // hosts requests can go to: a comma-separated list of domains, such as
 // "temporal.io, api.stripe.com". A domain allows itself and its subdomains. Unset or empty, any
-// host is allowed. Redirects aren't checked.
+// host is allowed. Every redirect is checked too: one to a host that isn't allowed isn't followed.
 const AllowedDomainsEnvVar = "HTTP_CONNECTOR_ALLOWED_DOMAINS"
 
 // allowedDomains reads the domains from AllowedDomainsEnvVar, lower case and without spaces. nil
@@ -62,11 +62,40 @@ func (a *HTTPActivities) CheckDomain(rawURL string) error {
 	if err != nil {
 		return err
 	}
-	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	for _, d := range a.domains {
-		if host == d || strings.HasSuffix(host, "."+d) {
-			return nil
-		}
+	host := normalHost(u.Hostname())
+	if a.allowedHost(host) {
+		return nil
 	}
 	return fmt.Errorf("domain %q is not on the connector's list of allowed domains (%s)", host, AllowedDomainsEnvVar)
+}
+
+// allowedHost reports whether host, from normalHost, is one of the allowed domains or a subdomain
+// of one. With no domains set, every host is allowed.
+func (a *HTTPActivities) allowedHost(host string) bool {
+	if a.domains == nil {
+		return true
+	}
+	for _, d := range a.domains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalHost is a URL's host name as the allowed domains are matched against it: lower case,
+// without a port or trailing dot.
+func normalHost(hostname string) string {
+	return strings.TrimSuffix(strings.ToLower(hostname), ".")
+}
+
+// redirectNotAllowedError is checkRedirect's error for a redirect to a host that isn't an allowed
+// domain. SendRequest turns it into a ClientError.
+type redirectNotAllowedError struct {
+	host string
+}
+
+func (e *redirectNotAllowedError) Error() string {
+	return fmt.Sprintf("redirected to %q, which is not on the connector's list of allowed domains (%s), so the redirect wasn't followed",
+		e.host, AllowedDomainsEnvVar)
 }

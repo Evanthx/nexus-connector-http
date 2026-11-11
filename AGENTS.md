@@ -107,7 +107,8 @@ The input as JSON:
 | `username` | none | Basic auth user. Needs `apiKeyEnvVar`; can't be used with `apiKeyParam`. |
 | `timeoutSeconds` | 30 | One attempt, 1–60. |
 
-Only a **2xx** is a result. Redirects are followed with Go's default policy (up to 10), except https → http.
+Only a **2xx** is a result. Redirects are followed with Go's default policy (up to 10), except
+https → http, and except to a host outside `HTTP_CONNECTOR_ALLOWED_DOMAINS` when it is set.
 
 ## Rules that break things when ignored
 
@@ -130,9 +131,9 @@ Only a **2xx** is a result. Redirects are followed with Go's default policy (up 
   `anon`) for the window, without sending them. Restarting the worker clears it; several workers
   each probe on their own.
 - **Without `HTTP_CONNECTOR_ALLOWED_DOMAINS`, the connector calls any URL**, including ones on its
-  own network. Tell the user if that matters where it runs. The list checks the request's URL
-  only: redirects are followed wherever they go, so an open redirect on an allowed domain reaches
-  any host. It checks names, not the addresses they resolve to.
+  own network. Tell the user if that matters where it runs. The list checks the request's URL and
+  every redirect: a redirect to a host not on it isn't followed, and fails as a `ClientError`
+  naming the host. It checks names, not the addresses they resolve to.
 - **Body limit 2 MiB**, and the response must fit Temporal's payload limit (2 MB by default).
 
 ## Check it is working
@@ -171,7 +172,7 @@ callers find it with `errors.As`. For an HTTP response, `Details` holds the `Sen
 | Type | Cause | Retried |
 |---|---|---|
 | `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, a caller timeout under `timeoutSeconds` + 10s, a host not in the allowed domains, invalid header name or value, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
-| `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
+| `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a redirect to a host not in the allowed domains (message `redirected to "<host>", which is not on the connector's list of allowed domains`, details the 3xx with its `Location`); a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
 | `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 1s×2 up to 30s |
 | `RateLimited` | 429, or the key is in the rate-limit cache. | After the window |
 
@@ -259,7 +260,10 @@ go test -short ./...                                         # skip the end-to-e
   `redactResponse`, in the response's status, headers and body. `checkRedirect` is Go's
   default policy (10 redirects, re-enforced since setting `CheckRedirect` drops it) except that
   it doesn't follow https → http (`http.ErrUseLastResponse`, so the 3xx becomes a `ClientError`
-  with its response); Go alone would send `Authorization` there in plaintext. Otherwise Go keeps
+  with its response); Go alone would send `Authorization` there in plaintext. It is a method on
+  `HTTPActivities`, so it also refuses a hop to a host `allowedHost` rejects, with a
+  `redirectNotAllowedError` that `SendRequest` turns into a non-retryable `ClientError` naming the
+  host, with the 3xx's status and headers (body closed by the client) in its details. Otherwise Go keeps
   `Authorization` for the same host and subdomains, and sends `Referer` with any query key.
 - Non-2xx errors carry the `SendRequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.

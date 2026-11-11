@@ -2,6 +2,7 @@ package httpconnector
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -89,4 +90,61 @@ func TestSendRequest_DomainNotAllowed(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(http.StatusOK), resp.StatusCode)
 	require.Equal(t, int32(1), hits.Load())
+}
+
+// redirectingServer redirects every request to target, with a 302.
+func redirectingServer(t *testing.T, target string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// A redirect to a host that isn't an allowed domain isn't followed: the call fails, without a
+// retry, with a ClientError that names the host, and the redirect's status and Location in its
+// details. The target never gets the request.
+func TestSendRequest_RedirectOffAllowlistIsNotFollowed(t *testing.T) {
+	target, hits := countingServer(t, http.StatusOK, "ok")
+	// target listens on 127.0.0.1; "localhost" reaches it under a name that isn't allowed.
+	targetURL := strings.Replace(target.URL, "127.0.0.1", "localhost", 1) + "/landing"
+	srv := redirectingServer(t, targetURL)
+	a := newWithWindow(testWindow)
+	a.domains = []string{"127.0.0.1"}
+
+	_, err := runSendRequest(t, a, httpapi.SendRequestInput{URL: srv.URL})
+	ae := appErr(t, err)
+	require.Equal(t, ErrorTypeClientError, ae.Type())
+	require.True(t, ae.NonRetryable())
+	require.Equal(t, srv.URL+` redirected to "localhost", which is not on the connector's list of allowed domains (`+
+		AllowedDomainsEnvVar+"), so the redirect wasn't followed", ae.Message())
+	var resp httpapi.SendRequestOutput
+	require.NoError(t, ae.Details(&resp))
+	require.Equal(t, int64(http.StatusFound), resp.StatusCode)
+	require.Equal(t, []string{targetURL}, resp.Headers.AdditionalProperties["Location"])
+	require.Zero(t, hits.Load(), "the redirect's target never got the request")
+}
+
+// A redirect within the allowed domains is followed, and with no allowed domains any redirect is.
+func TestSendRequest_RedirectOnAllowlistIsFollowed(t *testing.T) {
+	target, hits := countingServer(t, http.StatusOK, "ok")
+	for _, tc := range []struct {
+		name    string
+		domains []string
+		target  string
+	}{
+		{"to an allowed domain", []string{"127.0.0.1"}, target.URL + "/landing"},
+		{"with no allowed domains", nil, strings.Replace(target.URL, "127.0.0.1", "localhost", 1) + "/landing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := hits.Load()
+			a := newWithWindow(testWindow)
+			a.domains = tc.domains
+			resp, err := runSendRequest(t, a, httpapi.SendRequestInput{URL: redirectingServer(t, tc.target).URL})
+			require.NoError(t, err)
+			require.Equal(t, int64(http.StatusOK), resp.StatusCode)
+			require.Equal(t, before+1, hits.Load())
+		})
+	}
 }

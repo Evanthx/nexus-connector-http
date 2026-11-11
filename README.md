@@ -166,7 +166,7 @@ of values), `body`, and `durationMillis`.
 #### The request
 
 The connector sends one HTTP request per attempt, with the URL, method, headers, query parameters
-and body given. Redirects are followed as Go's `http.Client` follows them, up to 10, except from `https` to a URL that isn't `https`. It returns a
+and body given. Redirects are followed as Go's `http.Client` follows them, up to 10, except from `https` to a URL that isn't `https`, and except to a host that isn't one of the [allowed domains](#allowed-domains), when they are set. It returns a
 **2xx** answer as the operation's result. Any other answer is an error that carries the response,
 and is retried or not depending on its status, below.
 
@@ -177,7 +177,7 @@ Every failure is an `ApplicationError` whose type is one of these:
 | Type | When | Retried |
 |---|---|---|
 | `InvalidRequest` | The request can't be made: a bad URL, a `timeoutSeconds` outside 1–60, a caller's operation timeout too short for one attempt (see [Timeouts](#timeouts)), a header name or value that isn't valid HTTP (such as one with a newline), a bad or missing API key variable, or a host that isn't an [allowed domain](#allowed-domains). It is never sent. | No |
-| `ClientError` | The endpoint answered with a status that sending the same request again won't change: any 4xx not listed under `Transient` or `RateLimited`, 501, 505, 511, or a 3xx that wasn't followed (such as a 304, or a redirect from `https` to `http`). Also a response body over 2 MiB; the connector stops reading after 2 MiB. Also a TLS certificate that doesn't verify (expired, wrong host, or an unknown authority). | No |
+| `ClientError` | The endpoint answered with a status that sending the same request again won't change: any 4xx not listed under `Transient` or `RateLimited`, 501, 505, 511, or a 3xx that wasn't followed (such as a 304, a redirect from `https` to `http`, or a redirect to a host that isn't an [allowed domain](#allowed-domains)). Also a response body over 2 MiB; the connector stops reading after 2 MiB. Also a TLS certificate that doesn't verify (expired, wrong host, or an unknown authority). | No |
 | `Transient` | The endpoint answered 408, 409, 420, 421, 423, 424, 425, or any 5xx except 501, 505 and 511, or the request timed out or failed on the network. | With backoff: 1s, doubling, at most 30s apart |
 | `RateLimited` | The endpoint answered 429, or another request with the same rate-limit key did within the [rate-limit window](#rate-limiting). | After the rest of that window |
 
@@ -327,7 +327,8 @@ The connector also keeps keys from leaking on the way back:
   as in base64, isn't caught.
 - **Redirects never downgrade to plaintext.** A redirect from `https` to a URL that isn't `https`
   (such as `http`) isn't followed: the redirect itself is the response, and fails as a
-  `ClientError`. Otherwise redirects follow Go's default policy: the `Authorization` header goes to
+  `ClientError`. With [allowed domains](#allowed-domains) set, neither is a redirect to any other
+  host. Otherwise redirects follow Go's default policy: the `Authorization` header goes to
   the same host and its subdomains on any port, and is dropped for any other host, and each
   redirect sends a `Referer` with the previous URL, query string included (so an `apiKeyParam`
   key). Call only endpoints you trust with the key.
@@ -359,11 +360,19 @@ worker exit at startup. Unset or empty, any host is allowed.
 A request to any other host fails with `InvalidRequest`, saying
 `domain "example.com" is not on the connector's list of allowed domains`, and is never sent.
 
-The list limits the URL a request names, not where it ends up:
+Redirects are checked too. A redirect to an allowed domain is followed; one to any other host
+isn't, so an allowed site can't send the request elsewhere, even through a link redirector that
+goes to any URL it is given. The call fails, without a retry, with a `ClientError`:
 
-- **Redirects are followed** wherever they go (except https to http), so an allowed site that
-  redirects to any URL it is given, such as a search engine's link redirector, reaches any host.
-- **Names, not addresses.** An allowed name whose DNS resolves to an internal address is called.
+```
+https://docs.example.com/start redirected to "evil.example.net", which is not on the connector's
+list of allowed domains (HTTP_CONNECTOR_ALLOWED_DOMAINS), so the redirect wasn't followed
+```
+
+Its details hold the redirect's status and headers, including the `Location` it pointed to.
+
+The list checks names, not addresses: an allowed name whose DNS resolves to an internal address is
+called.
 
 ### Run the connector
 
@@ -584,7 +593,8 @@ endpoint's description.
    - checks the rate-limit cache for the request's key (`RateLimitKey`). If it is cached, it fails
      with `RateLimited` without sending;
    - sends the request with an `http.Client` whose timeout is `timeoutSeconds` and whose
-     `checkRedirect` refuses https → http redirects. A transport error is `Transient`, with its
+     `checkRedirect` refuses https → http redirects and, with allowed domains set, redirects to
+     any other host. A transport error is `Transient`, with its
      message passed through `redact`, except a TLS certificate that doesn't verify, which is a
      `ClientError`. An attempt that runs out `timeoutSeconds` says so;
    - reads up to 2 MiB of body, and passes the response through `redactResponse`;

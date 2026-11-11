@@ -195,12 +195,32 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 
 	secrets := secrets(req)
 	start := time.Now()
-	resp, err := (&http.Client{Timeout: timeout(req), CheckRedirect: checkRedirect}).Do(httpReq)
+	resp, err := (&http.Client{Timeout: timeout(req), CheckRedirect: a.checkRedirect}).Do(httpReq)
 	if err != nil {
 		// A *url.Error repeats the URL sent, which can have the API key in its query; req.URL can't.
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) {
 			err = urlErr.Err
+		}
+		// A redirect away from the allowed domains won't be allowed on the next attempt either. The
+		// client returns the redirect itself, with its body closed, and the caller gets its status
+		// and headers, so they can see the Location it pointed to.
+		var notAllowed *redirectNotAllowedError
+		if errors.As(err, &notAllowed) {
+			var details []any
+			if resp != nil {
+				out := httpapi.SendRequestOutput{
+					StatusCode:     int64(resp.StatusCode),
+					Status:         resp.Status,
+					Headers:        httpapi.SendRequestOutputHeaders{AdditionalProperties: resp.Header},
+					DurationMillis: time.Since(start).Milliseconds(),
+				}
+				redactResponse(&out, secrets)
+				details = append(details, out)
+			}
+			return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(
+				redact(fmt.Sprintf("%s %v", req.URL, err), secrets), ErrorTypeClientError,
+				temporal.ApplicationErrorOptions{NonRetryable: true, Details: details})
 		}
 		if attemptTimedOut(err, start, req) {
 			msg := fmt.Sprintf("calling %s: no response within timeoutSeconds (%s)", req.URL, timeout(req))
@@ -303,16 +323,25 @@ func attemptTimedOut(err error, start time.Time, req httpapi.SendRequestInput) b
 	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout(req)
 }
 
-// checkRedirect is http.Client's default redirect policy, except that a redirect from https to
-// http isn't followed: http.Client alone would follow it and send the Authorization header in
-// plaintext. SendRequest gets the redirect itself as the response, which fails as a ClientError.
+// checkRedirect is http.Client's default redirect policy, with two exceptions:
+//
+//   - A redirect from https to http isn't followed: http.Client alone would follow it and send the
+//     Authorization header in plaintext. SendRequest gets the redirect itself as the response,
+//     which fails as a ClientError.
+//   - A redirect to a host that isn't an allowed domain (AllowedDomainsEnvVar) isn't followed, so
+//     an allowed site can't send the request elsewhere. It fails with a redirectNotAllowedError,
+//     which SendRequest turns into a ClientError naming the host.
+//
 // Setting CheckRedirect replaces http.Client's limit of 10 redirects, so it is enforced here.
-func checkRedirect(req *http.Request, via []*http.Request) error {
+func (a *HTTPActivities) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= maxRedirects {
 		return fmt.Errorf("stopped after %d redirects", maxRedirects)
 	}
 	if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
 		return http.ErrUseLastResponse
+	}
+	if host := normalHost(req.URL.Hostname()); !a.allowedHost(host) {
+		return &redirectNotAllowedError{host: host}
 	}
 	return nil
 }
