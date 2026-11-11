@@ -1,7 +1,26 @@
 # AGENTS.md
 
-Instructions for AI agents that set up, run, call, and change this connector. README.md has the
-full explanations; this file has what you need to act, and the mistakes to avoid.
+Instructions for AI agents that set up, run, call, and change this connector. The `docs/`
+directory has the full explanations for humans; this file has what you need to act, and the
+mistakes to avoid.
+
+## Repo layout
+
+```
+http.nexusrpc.yaml          the contract (source of truth for the wire format)
+endpoint-description.md     the endpoint description shown in the Temporal UI
+cmd/worker/                 the connector's process
+httpconnector/              all connector logic
+generated/httpapi/          Go types generated from the contract — do not edit
+testcaller/                 test workflow, worker, starter, and end-to-end test
+docs/
+  setup.md                  prerequisites, running locally, Temporal Cloud
+  usage.md                  calling from Go and other languages, options, secrets
+  errors.md                 error types, timeouts, rate limiting, known limitations
+  testing.md                test workflow and test suites
+  how-it-works.md           architecture, packages, path of a request, changing the contract
+  troubleshooting.md        common errors and fixes
+```
 
 ## What this is
 
@@ -76,7 +95,7 @@ its own.
 
 From a workflow, with a Nexus client for `HTTPService` on the endpoint. Go callers use
 `generated/httpapi`; `testcaller/workflow.go` (`CallerWorkflow`) is a working example to copy.
-Other languages generate types from `http.nexusrpc.yaml` with nexgen.
+Other languages generate types from `http.nexusrpc.yaml` with nexgen (docs/clients.md; `make clients` shows all four languages).
 
 ```go
 c := workflow.NewNexusClient("http-endpoint", httpapi.HTTPService.ServiceName)
@@ -186,12 +205,13 @@ field.
 ### Commands
 
 ```bash
+make clients    # generate Go, Python, TypeScript and Java callers into .build/clients/ (not committed)
 make generate   # regenerate generated/httpapi from http.nexusrpc.yaml (downloads the pinned nexgen into .build/)
 make test       # go test -race; includes testcaller's end-to-end test, which needs the temporal CLI
-make lint       # golangci-lint (Slack connector's config)
+make lint       # golangci-lint
 make ci         # vet, workflowcheck, lint, test
 go test ./httpconnector -run TestSendRequest_429CachesKey -v   # single test
-go test -short ./...                                         # skip the end-to-end test
+go test -short ./...                                           # skip the end-to-end test
 ```
 
 ### Rules for changes
@@ -217,6 +237,9 @@ go test -short ./...                                         # skip the end-to-e
 - For a test that guards a fix, revert the fix and confirm the test fails before calling it done.
 
 ### How the code works
+
+See [docs/how-it-works.md](docs/how-it-works.md) for the full package guide and the path of a
+request through the code.
 
 - `http.nexusrpc.yaml` — the contract; `generated/httpapi` is generated from it.
 - `httpconnector/` — nearly all logic.
@@ -272,6 +295,8 @@ go test -short ./...                                         # skip the end-to-e
   none), a worker, a starter, and the end-to-end test.
 
 ### Tests
+
+See [docs/testing.md](docs/testing.md) for how to run the test workflow and the test suites.
 
 - `httpconnector/` — `SendRequest` in the SDK's activity test environment against `httptest`
   servers (helpers `runSendRequest`, `appErr`, `countingServer`), plus `Validate` and

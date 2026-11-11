@@ -1,4 +1,4 @@
-.PHONY: generate build test lint fmt vet workflowcheck ci
+.PHONY: generate clients build test lint fmt vet workflowcheck ci
 
 # nexgen is downloaded from its GitHub release into .build/ the first time it is needed.
 NEXGEN_VERSION := 0.2.9
@@ -8,7 +8,7 @@ NEXGEN := .build/nexgen-$(NEXGEN_VERSION)
 
 $(NEXGEN):
 	mkdir -p .build
-	curl -sSfL https://github.com/temporalio/nexgen/releases/download/v$(NEXGEN_VERSION)/nexgen-v$(NEXGEN_VERSION)-$(NEXGEN_ARCH)-$(NEXGEN_OS).tar.gz | tar -xz -C .build nexgen
+	curl --silent --show-error --fail --location https://github.com/temporalio/nexgen/releases/download/v$(NEXGEN_VERSION)/nexgen-v$(NEXGEN_VERSION)-$(NEXGEN_ARCH)-$(NEXGEN_OS).tar.gz | tar --extract --gzip --directory .build nexgen
 	mv .build/nexgen $@
 
 # nexgen never deletes files, so a stale one from an earlier run would stay behind.
@@ -16,6 +16,14 @@ generate: $(NEXGEN)
 	rm -rf generated/httpapi
 	$(NEXGEN) go http.nexusrpc.yaml --output generated/httpapi
 	gofmt -w generated/httpapi
+
+# Generates callers in every language nexgen supports, to show what they look like. Not committed.
+clients: $(NEXGEN)
+	rm -rf .build/clients
+	$(NEXGEN) go http.nexusrpc.yaml --output .build/clients/go/httpapi
+	$(NEXGEN) python http.nexusrpc.yaml --output .build/clients/python/httpapi
+	$(NEXGEN) typescript http.nexusrpc.yaml --output .build/clients/typescript/httpapi
+	$(NEXGEN) java http.nexusrpc.yaml --output .build/clients/java/httpapi --package-name com.example.httpapi
 
 build:
 	go build ./...
