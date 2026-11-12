@@ -85,9 +85,10 @@ its own.
 
    | Variable | Value |
    |---|---|
-   | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as an `Authorization` header's whole value. |
+   | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as any header's whole value. |
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the worker exit at startup. |
+   | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | Optional. Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. Unset: any host. An entry that isn't a bare domain (scheme, port, path, `*`, empty) makes the worker exit at startup. |
    | `TEMPORAL_*` | As above. |
 
@@ -126,8 +127,12 @@ The input as JSON:
 | `username` | none | Basic auth user. Needs `apiKeyEnvVar`; can't be used with `apiKeyParam`. |
 | `timeoutSeconds` | 30 | One attempt, 1–60. |
 
-Only a **2xx** is a result. Redirects are followed with Go's default policy (up to 10), except
-https → http, and except to a host outside `HTTP_CONNECTOR_ALLOWED_DOMAINS` when it is set.
+Only a **2xx** is a result. Redirects aren't followed unless `HTTP_CONNECTOR_ALLOW_REDIRECTS` is
+true; an unfollowed 3xx is a `ClientError` with its response. When true, they follow Go's default
+policy (up to 10), except https → http, and except to a host outside
+`HTTP_CONNECTOR_ALLOWED_DOMAINS` when it is set. `Referer` is never sent on a redirect, and once a
+redirect leaves the original host and its subdomains, headers filled from a secret are dropped,
+as Go drops `Authorization` and `Cookie`. Headers with literal values follow the redirect.
 
 ## Rules that break things when ignored
 
@@ -139,10 +144,10 @@ https → http, and except to a host outside `HTTP_CONNECTOR_ALLOWED_DOMAINS` wh
   `timeoutSeconds` + 10s fails at once with `InvalidRequest`. Cancelling the caller's workflow
   cancels the activity.
 - **Never put a secret in the request.** Name a `HTTP_CONNECTOR_SECRET_*` variable in
-  `apiKeyEnvVar`, or as the `Authorization` header's whole value (the variable then holds the whole
-  header, scheme included, e.g. `Bearer ...` or `Basic <base64>` for Stripe-style auth). Any other
-  `Authorization` value is sent and stored in workflow history as is. Export the variable in the
-  worker's environment, not the caller's.
+  `apiKeyEnvVar`, or as any header's whole value, such as `Authorization` or `X-Api-Key` (the
+  variable then holds the whole header value, scheme included, e.g. `Bearer ...` or
+  `Basic <base64>` for Stripe-style auth). Any other header value is sent and stored in workflow
+  history as is. Export the variable in the worker's environment, not the caller's.
 - **A caller with no Nexus timeout retries a failing endpoint for 25 hours** (the default
   maximum). Give the operation a short timeout when trying things out.
 - **The rate-limit cache is per worker and in memory.** A 429 holds back every request with the
@@ -151,7 +156,7 @@ https → http, and except to a host outside `HTTP_CONNECTOR_ALLOWED_DOMAINS` wh
   each probe on their own.
 - **Without `HTTP_CONNECTOR_ALLOWED_DOMAINS`, the connector calls any URL**, including ones on its
   own network. Tell the user if that matters where it runs. The list checks the request's URL and
-  every redirect: a redirect to a host not on it isn't followed, and fails as a `ClientError`
+  every followed redirect: a redirect to a host not on it isn't followed, and fails as a `ClientError`
   naming the host. It checks names, not the addresses they resolve to.
 - **Body limit 2 MiB**, and the response must fit Temporal's payload limit (2 MB by default).
 
@@ -225,7 +230,7 @@ go test -short ./...                                           # skip the end-to
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
   the `ErrorType*` constants and `AllowedDomainsEnvVar`. `New`, `HTTPActivities`, `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
-  `InvalidRequestError`, `SecretEnvPrefix`, `RateLimitMinutesEnvVar` and `MaxDurationEnvVar` are
+  `InvalidRequestError`, `SecretEnvPrefix`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar` and `AllowRedirectsEnvVar` are
   exported on purpose, though only the package uses them: they are
   the connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
@@ -247,7 +252,7 @@ request through the code.
     activity; `ApplyStatus`, which turns a response's status into the result (clears or marks the
     rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
     whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
-    error type); `checkRedirect`; redaction.
+    error type); redaction.
   - The operation validates first (`Validate`, then `CheckDomain`, then `ScheduleToClose` from
     the `operation-timeout` header) and returns a `BadRequest` handler error (cause: an
     `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
@@ -258,7 +263,8 @@ request through the code.
     backoff 1s×2 up to 30s, which now applies only to attempt timeouts.
   - `request.go`: `build`, in steps `parseURL`, `checkTimeouts`, `setQuery` (query parameters, a
     query API key, and the `username`/`apiKeyParam` check), `setHeaders` (headers, the
-    `Authorization` variable via `secretEnv`, basic or Bearer auth, `httpguts` validation). Also
+    variable any header names via `secretEnv`, basic or Bearer auth, `httpguts` validation). Also
+    `secretHeaderVars` (header → variable, for every header whose value starts with the prefix),
     `Validate`, `apiKey`, `RateLimitKey`, `secrets(req)`.
   - `errors.go`: the `ErrorType*` constants and the retry delays. `transientError` sets
     `NextRetryDelay` 1s×2 up to 30s, counting only Transient failures in a row; the count passes
@@ -277,17 +283,22 @@ request through the code.
     `SendRequest` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
     entries. It takes an explicit `now`. The window is read by `httpconnector.New()`, through
     `envMinutes`, which `MaxDurationEnvVar` shares.
-- Secrets: `redact` replaces each secret from `secrets(req)` (including an `Authorization`
-  variable's credentials without the scheme, and the base64 `user:key` for basic auth) raw,
+- Secrets: `redact` replaces each secret from `secrets(req)` (including a header variable's
+  credentials without the scheme, and the base64 `user:key` for basic auth) raw,
   URL-escaped, Go-quoted and JSON-escaped, in transport and body-read errors and, through
-  `redactResponse`, in the response's status, headers and body. `checkRedirect` is Go's
-  default policy (10 redirects, re-enforced since setting `CheckRedirect` drops it) except that
-  it doesn't follow https → http (`http.ErrUseLastResponse`, so the 3xx becomes a `ClientError`
-  with its response); Go alone would send `Authorization` there in plaintext. It is a method on
-  `HTTPActivities`, so it also refuses a hop to a host `allowedHost` rejects, with a
-  `redirectNotAllowedError` that `SendRequest` turns into a non-retryable `ClientError` naming the
-  host, with the 3xx's status and headers (body closed by the client) in its details. Otherwise Go keeps
-  `Authorization` for the same host and subdomains, and sends `Referer` with any query key.
+  `redactResponse`, in the response's status, headers and body.
+  - `redirect.go`: `AllowRedirectsEnvVar`, read by `New()` into `HTTPActivities.allowRedirects`, and
+    `checkRedirect(secretHeaders)`, which returns the client's `CheckRedirect`. Off, it returns
+    `http.ErrUseLastResponse` for every redirect, so the 3xx becomes a `ClientError` with its
+    response. On, it is Go's default policy (10 redirects, re-enforced since setting `CheckRedirect`
+    drops it) except that it doesn't follow https → http (`http.ErrUseLastResponse`); refuses a hop
+    to a host `allowedHost` rejects with a `redirectNotAllowedError`, which `SendRequest` turns into
+    a non-retryable `ClientError` naming the host, with the 3xx's status and headers in its details;
+    deletes `Referer` (Go sets it to the previous URL, query key included); and, once `leftSite`
+    (any hop not the original host or a subdomain of it, sticky as in Go), deletes every header from
+    `secretHeaderVars`. Go itself drops `Authorization` and `Cookie` there. Keep the two conditions
+    in step: ours must strip whenever Go's does. Any new way the connector puts a secret into a
+    header must be added to `secretHeaderVars` so a redirect drops it.
 - Non-2xx errors carry the `SendRequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.
 - `cmd/worker` — the connector's process: `envconfig`, `worker.New` on `TaskQueue`, `Register`.

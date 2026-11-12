@@ -222,7 +222,7 @@ func (m SendRequestInput) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// SendRequestInputHeaders Request headers. An Authorization value that starts with
+// SendRequestInputHeaders Request headers. A value that starts with
 // HTTP_CONNECTOR_SECRET_ names an environment variable on the connector worker, whose
 // value is sent instead
 type SendRequestInputHeaders struct {

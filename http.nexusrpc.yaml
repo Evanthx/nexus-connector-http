@@ -34,7 +34,7 @@ $defs:
         type: object
         additionalProperties:
           type: string
-        description: "Request headers. An Authorization value that starts with HTTP_CONNECTOR_SECRET_ names an environment variable on the connector worker, whose value is sent instead"
+        description: "Request headers. A value that starts with HTTP_CONNECTOR_SECRET_ names an environment variable on the connector worker, whose value is sent instead"
       queryParams:
         type: object
         additionalProperties:

@@ -54,9 +54,10 @@ Set these on the connector worker (`cmd/worker`).
 
 | Variable | Meaning |
 |---|---|
-| `HTTP_CONNECTOR_SECRET_*` | API keys that requests can name in `apiKeyEnvVar`, or as the whole value of an `Authorization` header. See [Usage — API keys and secrets](usage.md#api-keys-and-secrets). |
+| `HTTP_CONNECTOR_SECRET_*` | API keys that requests can name in `apiKeyEnvVar`, or as the whole value of any header. See [Usage — API keys and secrets](usage.md#api-keys-and-secrets). |
 | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | How long a key stays rate-limited after a 429 response, in whole minutes. Must be a whole number ≥ 1. Default 5. |
 | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | The longest the connector keeps retrying, in whole minutes, when the caller's timeout is longer or unset. Must be a whole number ≥ 1. Default 1500 (25 hours). |
+| `HTTP_CONNECTOR_ALLOW_REDIRECTS` | `true` to follow redirects; default `false`, which follows none. See [Usage — redirects](usage.md#redirects). |
 | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | Comma-separated list of domains the connector may call, e.g. `temporal.io, api.stripe.com`. Spaces are ignored. Each allows itself and its subdomains. Unset: any host. See [Usage — allowed domains](usage.md#allowed-domains). |
 | `TEMPORAL_*` | How to connect to Temporal. See below. |
 

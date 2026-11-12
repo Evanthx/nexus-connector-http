@@ -112,6 +112,7 @@ func TestSendRequest_RedirectOffAllowlistIsNotFollowed(t *testing.T) {
 	srv := redirectingServer(t, targetURL)
 	a := newWithWindow(testWindow)
 	a.domains = []string{"127.0.0.1"}
+	a.allowRedirects = true
 
 	_, err := runSendRequest(t, a, httpapi.SendRequestInput{URL: srv.URL})
 	ae := appErr(t, err)
@@ -141,6 +142,7 @@ func TestSendRequest_RedirectOnAllowlistIsFollowed(t *testing.T) {
 			before := hits.Load()
 			a := newWithWindow(testWindow)
 			a.domains = tc.domains
+			a.allowRedirects = true
 			resp, err := runSendRequest(t, a, httpapi.SendRequestInput{URL: redirectingServer(t, tc.target).URL})
 			require.NoError(t, err)
 			require.Equal(t, int64(http.StatusOK), resp.StatusCode)

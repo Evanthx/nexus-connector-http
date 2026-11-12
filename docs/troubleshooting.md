@@ -32,6 +32,8 @@ A workflow that never advances past the Nexus operation usually means one of:
 
 **`RateLimited`**: the target server returned 429. The connector waited for the rate-limit window (`HTTP_CONNECTOR_RATE_LIMIT_MINUTES`, default 5 minutes) but the caller's timeout ran out before another window fit. Increase the caller's `ScheduleToCloseTimeout` or reduce the rate-limit window.
 
+**`ClientError: ... returned status 301`** (or 302, 303, 307, 308): redirects are off by default. Request the URL in the error details' `Location` directly, or set `HTTP_CONNECTOR_ALLOW_REDIRECTS=true` on the connector worker. See [Usage — redirects](usage.md#redirects).
+
 **`ClientError: ... redirected to "...", which is not on the connector's list of allowed domains`**: a redirect took the request to a host not in `HTTP_CONNECTOR_ALLOWED_DOMAINS`. The redirect target host must be added to the list if the redirect is expected. See [Usage — allowed domains](usage.md#allowed-domains).
 
 **`ClientError: ... TLS certificate`**: the target server's certificate did not verify. The connector treats this as a non-retryable error. Check that the URL is correct and the server's certificate is valid.

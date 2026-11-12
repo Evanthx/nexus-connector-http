@@ -82,7 +82,7 @@ Every field of `SendRequestInput`. A request with an unknown field or an unliste
 |---|---|---|---|
 | `url` | **Yes** | | Absolute `http` or `https` URL. |
 | `method` | No | `GET` | `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, or `OPTIONS`, in upper case. |
-| `headers` | No | none | Request headers. An `Authorization` value that starts with `HTTP_CONNECTOR_SECRET_` names an environment variable on the connector; the connector sends its value instead. See [API keys and secrets](#api-keys-and-secrets). |
+| `headers` | No | none | Request headers. A value that starts with `HTTP_CONNECTOR_SECRET_` names an environment variable on the connector; the connector sends its value instead. See [API keys and secrets](#api-keys-and-secrets). |
 | `queryParams` | No | none | Query parameters, added to any already in the URL. |
 | `body` | No | none | Request body, as a string. |
 | `username` | No | none | Basic auth username. The password is the API key from `apiKeyEnvVar`. Needs `apiKeyEnvVar`; cannot be combined with `apiKeyParam`. |
@@ -112,7 +112,7 @@ a request can use it:
  "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_WEATHER", "apiKeyParam": "key"}
 ```
 
-An `Authorization` header value can also reference a secret: if the whole value starts with `HTTP_CONNECTOR_SECRET_`, it is the name of a variable, and the connector sends that variable's value as the header. The variable holds the entire header value, scheme included:
+Any header value can also reference a secret: if the whole value starts with `HTTP_CONNECTOR_SECRET_`, it is the name of a variable, and the connector sends that variable's value as the header. The variable holds the entire header value, scheme included:
 
 ```bash
 export HTTP_CONNECTOR_SECRET_ITEMS_AUTH='Bearer ...'
@@ -123,18 +123,36 @@ export HTTP_CONNECTOR_SECRET_ITEMS_AUTH='Bearer ...'
  "headers": {"Authorization": "HTTP_CONNECTOR_SECRET_ITEMS_AUTH"}}
 ```
 
+For an API that takes its key in its own header:
+
+```json
+{"url": "https://api.example.com/items",
+ "headers": {"X-Api-Key": "HTTP_CONNECTOR_SECRET_ITEMS_KEY"}}
+```
+
 For Stripe-style auth where the key is the username and the password is empty, put the whole encoded header in the variable:
 
 ```bash
 export HTTP_CONNECTOR_SECRET_STRIPE_AUTH="Basic $(printf 'sk_live_...:' | base64)"
 ```
 
-Any other `Authorization` value is sent as-is and stored in workflow history.
+Any other header value is sent as-is and stored in workflow history.
 
 The connector also prevents keys from leaking in responses:
 
-- **Echoes are redacted.** Some endpoints echo back what they received (httpbin does). Every secret value, and the credentials of an `Authorization` variable without the scheme, is replaced with `[REDACTED]` in the response's status, headers, and body, and in error messages — raw, URL-escaped, quoted, and JSON-escaped. Base64-encoded values are not caught.
-- **Redirects never downgrade to plaintext.** A redirect from `https` to a non-`https` URL is not followed; it is returned as a `ClientError`. With `HTTP_CONNECTOR_ALLOWED_DOMAINS` set, redirects to any host not on the list are also refused.
+- **Echoes are redacted.** Some endpoints echo back what they received (httpbin does). Every secret value, and the credentials of a header variable without the scheme, is replaced with `[REDACTED]` in the response's status, headers, and body, and in error messages — raw, URL-escaped, quoted, and JSON-escaped. Base64-encoded values are not caught.
+- **Redirects are off by default.** See [Redirects](#redirects).
+
+## Redirects
+
+By default the connector follows no redirects, not even to the same host. A 3xx fails as a non-retryable `ClientError` whose details hold the response, including its `Location`; the caller can request that URL itself if it should be followed.
+
+Set `HTTP_CONNECTOR_ALLOW_REDIRECTS=true` on the connector worker to follow them, up to 10. Any value other than `true` or `false` (or another value Go's `strconv.ParseBool` accepts) makes the worker exit at startup. With redirects on:
+
+- **Never to plaintext.** A redirect from `https` to a non-`https` URL is not followed; it is returned as a `ClientError`.
+- **Only to allowed domains.** With `HTTP_CONNECTOR_ALLOWED_DOMAINS` set, every redirect is checked against it (see [Allowed domains](#allowed-domains)). Unset, a redirect can go to any host.
+- **Secrets stay with the original site.** Once a redirect goes to a host that is neither the original host nor a subdomain of it, Go drops the `Authorization` and `Cookie` headers, and the connector also drops every header filled from an `HTTP_CONNECTOR_SECRET_*` variable. They stay dropped if a later redirect comes back. `Referer`, which would carry a query-parameter API key, is never sent on a redirect.
+- **Literal headers follow.** A header with a literal value, such as `"X-Api-Key": "abc"`, is sent to every host the redirect reaches, as Go, curl and Python `requests` do. Use a secret variable for any credential.
 
 ## Allowed domains
 
@@ -148,7 +166,7 @@ A request to a disallowed host fails with `InvalidRequest`:
 domain "example.com" is not on the connector's list of allowed domains
 ```
 
-Redirects are checked too. A redirect to a host not on the list is not followed and fails as a `ClientError`:
+Followed redirects are checked too. A redirect to a host not on the list is not followed and fails as a `ClientError`:
 
 ```
 https://docs.example.com/start redirected to "evil.example.net", which is not on the connector's

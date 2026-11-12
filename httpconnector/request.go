@@ -115,22 +115,22 @@ func setQuery(u *url.URL, req httpapi.SendRequestInput) (headerKey string, err e
 	return headerKey, nil
 }
 
-// setHeaders sets req's headers on httpReq. Later sources of the Authorization header replace
-// earlier ones: req's headers, then the variable an Authorization header names, then headerKey
-// (the API key, if it doesn't go in the query): the basic auth password with a username, else a
-// Bearer token.
+// setHeaders sets req's headers on httpReq. A header whose whole value names a variable (see
+// secretHeaderVars) is sent with that variable's value instead. headerKey (the API key, if it
+// doesn't go in the query) then replaces any Authorization header: the basic auth password with a
+// username, else a Bearer token.
 func setHeaders(httpReq *http.Request, req httpapi.SendRequestInput, headerKey string) error {
 	if req.Headers != nil {
 		for k, v := range req.Headers.AdditionalProperties {
+			if strings.HasPrefix(v, SecretEnvPrefix) {
+				secret, err := secretEnv(v)
+				if err != nil {
+					return err
+				}
+				v = secret
+			}
 			httpReq.Header.Set(k, v)
 		}
-	}
-	if envVar := authorizationEnvVar(req); envVar != "" {
-		secret, err := secretEnv(envVar)
-		if err != nil {
-			return err
-		}
-		httpReq.Header.Set("Authorization", secret)
 	}
 	if headerKey != "" {
 		if user := value(req.Username); user != "" {
@@ -172,26 +172,36 @@ func secretEnv(envVar string) (string, error) {
 	return secret, nil
 }
 
-// authorizationEnvVar is the variable named by req's Authorization header, or "" if the header
-// isn't a variable name. A header whose whole value starts with SecretEnvPrefix names a variable
-// on the connector worker, and the connector sends that variable's value as the header instead,
-// so the secret stays out of the request and its history.
-func authorizationEnvVar(req httpapi.SendRequestInput) string {
+// secretHeaderVars maps each of req's headers whose whole value starts with SecretEnvPrefix, by
+// canonical name, to the variable on the connector worker that value names. The connector sends
+// the variable's value as the header instead, so the secret stays out of the request and its
+// history, and drops the header on a redirect that leaves the original site (see checkRedirect).
+func secretHeaderVars(req httpapi.SendRequestInput) map[string]string {
 	if req.Headers == nil {
-		return ""
+		return nil
 	}
+	var vars map[string]string
 	for k, v := range req.Headers.AdditionalProperties {
-		if http.CanonicalHeaderKey(k) == "Authorization" && strings.HasPrefix(v, SecretEnvPrefix) {
-			return v
+		if strings.HasPrefix(v, SecretEnvPrefix) {
+			if vars == nil {
+				vars = make(map[string]string)
+			}
+			vars[http.CanonicalHeaderKey(k)] = v
 		}
 	}
-	return ""
+	return vars
+}
+
+// authorizationEnvVar is the variable named by req's Authorization header, or "" if the header
+// isn't a variable name (see secretHeaderVars).
+func authorizationEnvVar(req httpapi.SendRequestInput) string {
+	return secretHeaderVars(req)["Authorization"]
 }
 
 // secrets are the values of req's secret variables that are set: its API key (and, with a
-// username, the encoded basic auth credentials it is part of), and its Authorization header's
-// variable along with that value's credentials without the scheme (the "abc" of "Bearer abc"),
-// which an endpoint can echo alone.
+// username, the encoded basic auth credentials it is part of), and each variable a header names
+// along with that value's credentials without the scheme (the "abc" of "Bearer abc"), which an
+// endpoint can echo alone.
 func secrets(req httpapi.SendRequestInput) []string {
 	var values []string
 	if envVar := value(req.APIKeyEnvVar); strings.HasPrefix(envVar, SecretEnvPrefix) {
@@ -202,7 +212,7 @@ func secrets(req httpapi.SendRequestInput) []string {
 			}
 		}
 	}
-	if envVar := authorizationEnvVar(req); envVar != "" {
+	for _, envVar := range secretHeaderVars(req) {
 		if v := os.Getenv(envVar); v != "" {
 			values = append(values, v)
 			if _, credentials, ok := strings.Cut(v, " "); ok && credentials != "" {

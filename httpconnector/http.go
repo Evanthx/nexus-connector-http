@@ -32,14 +32,16 @@ const TaskQueue = "nexus-connector-http"
 // HTTPActivities is the SendRequest activity plus the rate-limit cache it shares across calls.
 // Register one instance per worker, so every call on that worker shares the cache.
 type HTTPActivities struct {
-	lim      *limiter
-	domains  []string      // allowed domains; nil allows any host
-	maxTotal time.Duration // the longest a call may take in all
+	lim            *limiter
+	domains        []string      // allowed domains; nil allows any host
+	allowRedirects bool          // whether redirects are followed
+	maxTotal       time.Duration // the longest a call may take in all
 }
 
 // New returns HTTPActivities with an empty rate-limit cache, whose window it reads from
-// RateLimitMinutesEnvVar, the allowed domains from AllowedDomainsEnvVar, and the longest a call
-// may take from MaxDurationEnvVar. An invalid value of any of them is an error.
+// RateLimitMinutesEnvVar, the allowed domains from AllowedDomainsEnvVar, whether to follow
+// redirects from AllowRedirectsEnvVar, and the longest a call may take from MaxDurationEnvVar. An
+// invalid value of any of them is an error.
 func New() (*HTTPActivities, error) {
 	window, err := rateLimitWindow()
 	if err != nil {
@@ -49,12 +51,17 @@ func New() (*HTTPActivities, error) {
 	if err != nil {
 		return nil, err
 	}
+	redirects, err := allowRedirects()
+	if err != nil {
+		return nil, err
+	}
 	maxDuration, err := readMaxDuration()
 	if err != nil {
 		return nil, err
 	}
 	a := newWithWindow(window)
 	a.domains = domains
+	a.allowRedirects = redirects
 	a.maxTotal = maxDuration
 	return a, nil
 }
@@ -195,7 +202,7 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 
 	secrets := secrets(req)
 	start := time.Now()
-	resp, err := (&http.Client{Timeout: timeout(req), CheckRedirect: a.checkRedirect}).Do(httpReq)
+	resp, err := (&http.Client{Timeout: timeout(req), CheckRedirect: a.checkRedirect(secretHeaderVars(req))}).Do(httpReq)
 	if err != nil {
 		// A *url.Error repeats the URL sent, which can have the API key in its query; req.URL can't.
 		var urlErr *url.Error
@@ -321,29 +328,6 @@ func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.SendReques
 func attemptTimedOut(err error, start time.Time, req httpapi.SendRequestInput) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout(req)
-}
-
-// checkRedirect is http.Client's default redirect policy, with two exceptions:
-//
-//   - A redirect from https to http isn't followed: http.Client alone would follow it and send the
-//     Authorization header in plaintext. SendRequest gets the redirect itself as the response,
-//     which fails as a ClientError.
-//   - A redirect to a host that isn't an allowed domain (AllowedDomainsEnvVar) isn't followed, so
-//     an allowed site can't send the request elsewhere. It fails with a redirectNotAllowedError,
-//     which SendRequest turns into a ClientError naming the host.
-//
-// Setting CheckRedirect replaces http.Client's limit of 10 redirects, so it is enforced here.
-func (a *HTTPActivities) checkRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return fmt.Errorf("stopped after %d redirects", maxRedirects)
-	}
-	if via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
-		return http.ErrUseLastResponse
-	}
-	if host := normalHost(req.URL.Hostname()); !a.allowedHost(host) {
-		return &redirectNotAllowedError{host: host}
-	}
-	return nil
 }
 
 // redact replaces every secret in s with [REDACTED], in each form it can take in a response or an

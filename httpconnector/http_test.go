@@ -686,8 +686,10 @@ func TestSendRequest_NoRedirectFromHTTPSToHTTP(t *testing.T) {
 	srv := httptest.NewTLSServer(http.RedirectHandler(plain.URL, http.StatusFound))
 	defer srv.Close()
 	trustTLS(t, srv)
+	a := newWithWindow(testWindow)
+	a.allowRedirects = true
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, a, httpapi.SendRequestInput{
 		URL:     srv.URL,
 		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"Authorization": testSecretVar}},
 	})
@@ -775,7 +777,9 @@ func TestSendRequest_RedirectLimit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL})
+	a := newWithWindow(testWindow)
+	a.allowRedirects = true
+	_, err := runSendRequest(t, a, httpapi.SendRequestInput{URL: srv.URL})
 	require.ErrorContains(t, err, "stopped after 10 redirects")
 	require.Equal(t, int32(maxRedirects), hits.Load())
 }

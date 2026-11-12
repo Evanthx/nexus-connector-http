@@ -9,7 +9,8 @@ import (
 // AllowedDomainsEnvVar names the environment variable on the connector worker that limits which
 // hosts requests can go to: a comma-separated list of domains, such as
 // "temporal.io, api.stripe.com". A domain allows itself and its subdomains. Unset or empty, any
-// host is allowed. Every redirect is checked too: one to a host that isn't allowed isn't followed.
+// host is allowed. When redirects are followed (AllowRedirectsEnvVar), every redirect is checked
+// too: one to a host that isn't allowed isn't followed.
 const AllowedDomainsEnvVar = "HTTP_CONNECTOR_ALLOWED_DOMAINS"
 
 // allowedDomains reads the domains from AllowedDomainsEnvVar, lower case and without spaces. nil
@@ -76,26 +77,25 @@ func (a *HTTPActivities) allowedHost(host string) bool {
 		return true
 	}
 	for _, d := range a.domains {
-		if host == d || strings.HasSuffix(host, "."+d) {
+		if isDomainOrSubdomain(host, d) {
 			return true
 		}
 	}
 	return false
 }
 
+// isDomainOrSubdomain reports whether host is domain or a subdomain of it, at a dot boundary. Both
+// must be in the same form, such as lower case. A host with a colon or percent sign is an IPv6
+// address, which only matches exactly, as in http.Client.
+func isDomainOrSubdomain(host, domain string) bool {
+	if host == domain {
+		return true
+	}
+	return !strings.ContainsAny(host, ":%") && strings.HasSuffix(host, "."+domain)
+}
+
 // normalHost is a URL's host name as the allowed domains are matched against it: lower case,
 // without a port or trailing dot.
 func normalHost(hostname string) string {
 	return strings.TrimSuffix(strings.ToLower(hostname), ".")
-}
-
-// redirectNotAllowedError is checkRedirect's error for a redirect to a host that isn't an allowed
-// domain. SendRequest turns it into a ClientError.
-type redirectNotAllowedError struct {
-	host string
-}
-
-func (e *redirectNotAllowedError) Error() string {
-	return fmt.Sprintf("redirected to %q, which is not on the connector's list of allowed domains (%s), so the redirect wasn't followed",
-		e.host, AllowedDomainsEnvVar)
 }
