@@ -32,6 +32,9 @@ func TestAllowedDomains(t *testing.T) {
 	for _, bad := range []string{
 		"temporal.io,", "a.com,,b.com", "https://temporal.io", "temporal.io:443", "temporal.io/docs",
 		"*.temporal.io", ".temporal.io", "temporal..io", "temporal io", "temporal.io," + DisableAllowlist,
+		"com", "temporal.io,io", "localhost", "*", "",
+		// A last label of digits makes an IPv4 address, which must be complete and valid.
+		"0.5", "10.0", "168.0.5", "300.1.1.1", "1.2.3.4.5", "example.123",
 	} {
 		t.Setenv(AllowedDomainsEnvVar, bad)
 		_, err := allowedDomains()
@@ -75,6 +78,7 @@ func TestCheckDomain(t *testing.T) {
 		"https://evil.com/?u=https://temporal.io",
 		"https://temporal.io@evil.com/",
 		"http://127.0.0.2/",
+		"http://x.127.0.0.1/",
 	} {
 		err := a.CheckDomain(blocked)
 		require.ErrorContains(t, err, "is not on the connector's list of allowed domains", blocked)
@@ -159,4 +163,13 @@ func TestSendRequest_RedirectOnAllowlistIsFollowed(t *testing.T) {
 			require.Equal(t, before+1, hits.Load())
 		})
 	}
+}
+
+// An IP address matches only itself, as entry or host: neither is a subdomain of anything.
+func TestIsDomainOrSubdomain_IPAddressesMatchExactly(t *testing.T) {
+	require.True(t, isDomainOrSubdomain("10.0.0.5", "10.0.0.5"))
+	require.False(t, isDomainOrSubdomain("x.10.0.0.5", "10.0.0.5"), "a name under an IP address")
+	require.False(t, isDomainOrSubdomain("10.0.0.5", "0.0.5"), "an IP address under a partial one")
+	require.False(t, isDomainOrSubdomain("192.168.0.5", "0.5"), "an IP address under a partial one")
+	require.True(t, isDomainOrSubdomain("api.example.com", "example.com"))
 }

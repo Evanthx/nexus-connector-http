@@ -2,6 +2,7 @@ package httpconnector
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 )
@@ -43,11 +44,17 @@ func allowedDomains() ([]string, error) {
 	return domains, nil
 }
 
-// isDomain reports whether d, in lower case, is a domain name or IPv4 address: dot-separated
-// labels of letters, digits and hyphens.
+// isDomain reports whether d, in lower case, is a domain name or IPv4 address: at least two
+// dot-separated labels of letters, digits and hyphens. A single label, such as a top-level domain
+// like "com", isn't one: it would allow every host under it. A last label of only digits makes d
+// an IPv4 address, as in a URL, so it must be a complete one: "10.0" or "0.5" isn't a domain.
 func isDomain(d string) bool {
-	if d == "" {
+	if !strings.Contains(d, ".") {
 		return false
+	}
+	if last := d[strings.LastIndexByte(d, '.')+1:]; last != "" && strings.Trim(last, "0123456789") == "" {
+		ip, err := netip.ParseAddr(d)
+		return err == nil && ip.Is4()
 	}
 	for label := range strings.SplitSeq(d, ".") {
 		if label == "" {
@@ -95,13 +102,23 @@ func (a *HTTPActivities) allowedHost(host string) bool {
 }
 
 // isDomainOrSubdomain reports whether host is domain or a subdomain of it, at a dot boundary. Both
-// must be in the same form, such as lower case. A host with a colon or percent sign is an IPv6
-// address, which only matches exactly, as in http.Client.
+// must be in the same form, such as lower case. An IP address, as host or as domain, only matches
+// exactly: "x.10.0.0.5" isn't under "10.0.0.5", and "10.0.0.5" isn't under "0.0.5". A host with a
+// colon or percent sign is an IPv6 address, possibly with a zone, which also only matches exactly.
 func isDomainOrSubdomain(host, domain string) bool {
 	if host == domain {
 		return true
 	}
-	return !strings.ContainsAny(host, ":%") && strings.HasSuffix(host, "."+domain)
+	if strings.ContainsAny(host, ":%") || isIP(host) || isIP(domain) {
+		return false
+	}
+	return strings.HasSuffix(host, "."+domain)
+}
+
+// isIP reports whether s is an IP address.
+func isIP(s string) bool {
+	_, err := netip.ParseAddr(s)
+	return err == nil
 }
 
 // normalHost is a URL's host name as the allowed domains are matched against it: lower case,

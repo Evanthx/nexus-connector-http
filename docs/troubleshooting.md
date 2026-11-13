@@ -8,7 +8,7 @@ Common errors, their causes, and fixes.
 
 **`HTTP_CONNECTOR_ALLOWED_DOMAINS is required`**: the variable is unset or empty. Set it to the comma-separated domains the connector may call, or to `DISABLE ALLOWLIST` to allow any host. See [Usage — allowed domains](usage.md#allowed-domains).
 
-**`invalid domain in HTTP_CONNECTOR_ALLOWED_DOMAINS`**: each entry must be a bare domain with no scheme, port, path, or wildcard — for example `api.stripe.com`, not `https://api.stripe.com` or `*.stripe.com`. An empty entry (a trailing comma) also fails.
+**`invalid domain in HTTP_CONNECTOR_ALLOWED_DOMAINS`**: each entry must be a bare domain of at least two labels, with no scheme, port, path, or wildcard — for example `api.stripe.com`, not `https://api.stripe.com`, `*.stripe.com`, or `com`. An empty entry (a trailing comma) also fails.
 
 ## Every call fails at once
 

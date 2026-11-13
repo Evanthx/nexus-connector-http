@@ -92,7 +92,7 @@ copies of it in one namespace share the same work.
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the worker exit at startup. |
-   | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | **Required.** Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. `DISABLE ALLOWLIST` (`DisableAllowlist`, any case) as the whole value allows any host. Unset or empty, or an entry that isn't a bare domain (scheme, port, path, `*`, empty), makes the worker exit at startup. |
+   | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | **Required.** Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. `DISABLE ALLOWLIST` (`DisableAllowlist`, any case) as the whole value allows any host. Unset or empty, or an entry that isn't a bare domain of at least two labels (scheme, port, path, `*`, empty, a single label such as `com` or `localhost`, or a partial IPv4 address such as `10.0`), makes the worker exit at startup. An IPv4 entry matches only that address. |
    | `TEMPORAL_*` | As above. |
 
 ## Call it
@@ -277,7 +277,8 @@ request through the code.
   - `allowlist.go`: `AllowedDomainsEnvVar`, read by `New()` into `HTTPActivities.domains` (required; nil,
     from `DisableAllowlist`, = any host); `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
     operation and again by `SendRequest` before sending. Matches the lower-cased host without port
-    or trailing dot, exactly or as a subdomain at a dot boundary.
+    or trailing dot, exactly or as a subdomain at a dot boundary; an IP address, as entry or host,
+    only exactly.
   - `timeout.go`: `MaxDurationEnvVar` (default 25h, read by `New()` into
     `HTTPActivities.maxTotal`, exported as `MaxDuration()`; there is always a maximum), `callbackMargin` (10s), and
     `ScheduleToClose(req, header)`: no header → the maximum; else header − margin, capped at the

@@ -156,7 +156,7 @@ Set `HTTP_CONNECTOR_ALLOW_REDIRECTS=true` on the connector worker to follow them
 
 ## Allowed domains
 
-`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required. Set it on the connector worker to a comma-separated list of domains, such as `temporal.io, google.com, stripe.com`. Spaces are ignored; case does not matter. A domain allows itself and all its subdomains: `temporal.io` allows `docs.temporal.io` but not `eviltemporal.io`. An IPv4 address such as `10.0.0.5` allows only that exact address. Each entry must be a bare domain with no scheme, port, path, or wildcard. An invalid or empty entry, or leaving the variable unset or empty, makes the worker exit at startup.
+`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required. Set it on the connector worker to a comma-separated list of domains, such as `temporal.io, google.com, stripe.com`. Spaces are ignored; case does not matter. A domain allows itself and all its subdomains: `temporal.io` allows `docs.temporal.io` but not `eviltemporal.io`. An IPv4 address such as `10.0.0.5` allows only that exact address, not names under it such as `x.10.0.0.5`. It must be a complete address: a partial one such as `10.0` or `0.5` is rejected, since an entry ending in a number is read as an IPv4 address. Each entry must be a bare domain of at least two labels, with no scheme, port, path, or wildcard: a single label such as `com` or `localhost` is rejected, since `com` would allow every `.com` host. An invalid or empty entry, or leaving the variable unset or empty, makes the worker exit at startup.
 
 To allow any host, set it to `DISABLE ALLOWLIST` (case does not matter; it must be the whole value). The connector then calls any `http` or `https` URL, including addresses on the connector's own network.
 
