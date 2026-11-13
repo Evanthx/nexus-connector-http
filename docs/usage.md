@@ -69,7 +69,7 @@ curl --include \
   --header 'Content-Type: application/json' \
   --header 'Nexus-Request-Id: my-request-1' \
   --data '{"url": "https://httpbin.org/get"}'
-temporal activity result --namespace http-connector --activity-id http-my-request-1
+temporal activity result --namespace connectors --activity-id http-my-request-1
 ```
 
 The response is `201 Created` with an operation token. The activity ID is `http-` plus the request ID you send.
@@ -150,15 +150,15 @@ By default the connector follows no redirects, not even to the same host. A 3xx 
 Set `HTTP_CONNECTOR_ALLOW_REDIRECTS=true` on the connector worker to follow them, up to 10. Any value other than `true` or `false` (or another value Go's `strconv.ParseBool` accepts) makes the worker exit at startup. With redirects on:
 
 - **Never to plaintext.** A redirect from `https` to a non-`https` URL is not followed; it is returned as a `ClientError`.
-- **Only to allowed domains.** With `HTTP_CONNECTOR_ALLOWED_DOMAINS` set, every redirect is checked against it (see [Allowed domains](#allowed-domains)). Unset, a redirect can go to any host.
+- **Only to allowed domains.** Every redirect is checked against `HTTP_CONNECTOR_ALLOWED_DOMAINS` (see [Allowed domains](#allowed-domains)). With `DISABLE ALLOWLIST`, a redirect can go to any host.
 - **Secrets stay with the original site.** Once a redirect goes to a host that is neither the original host nor a subdomain of it, Go drops the `Authorization` and `Cookie` headers, and the connector also drops every header filled from an `HTTP_CONNECTOR_SECRET_*` variable. They stay dropped if a later redirect comes back. `Referer`, which would carry a query-parameter API key, is never sent on a redirect.
 - **Literal headers follow.** A header with a literal value, such as `"X-Api-Key": "abc"`, is sent to every host the redirect reaches, as Go, curl and Python `requests` do. Use a secret variable for any credential.
 
 ## Allowed domains
 
-Set `HTTP_CONNECTOR_ALLOWED_DOMAINS` on the connector worker to a comma-separated list of domains, such as `temporal.io, google.com, stripe.com`. Spaces are ignored; case does not matter. A domain allows itself and all its subdomains: `temporal.io` allows `docs.temporal.io` but not `eviltemporal.io`. An IPv4 address such as `10.0.0.5` allows only that exact address. Each entry must be a bare domain with no scheme, port, path, or wildcard. An invalid or empty entry makes the worker exit at startup.
+`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required. Set it on the connector worker to a comma-separated list of domains, such as `temporal.io, google.com, stripe.com`. Spaces are ignored; case does not matter. A domain allows itself and all its subdomains: `temporal.io` allows `docs.temporal.io` but not `eviltemporal.io`. An IPv4 address such as `10.0.0.5` allows only that exact address. Each entry must be a bare domain with no scheme, port, path, or wildcard. An invalid or empty entry, or leaving the variable unset or empty, makes the worker exit at startup.
 
-Unset or empty, the connector calls any `http` or `https` URL, including addresses on the connector's own network.
+To allow any host, set it to `DISABLE ALLOWLIST` (case does not matter; it must be the whole value). The connector then calls any `http` or `https` URL, including addresses on the connector's own network.
 
 A request to a disallowed host fails with `InvalidRequest`:
 

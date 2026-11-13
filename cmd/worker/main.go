@@ -3,11 +3,12 @@
 //
 // It connects with the standard Temporal client configuration: the TEMPORAL_* environment
 // variables and the profile file the temporal CLI uses. The namespace defaults to
-// http-connector.
+// connectors.
 package main
 
 import (
 	"log"
+	"strings"
 
 	"github.com/temporalio/nexus-connector-http/httpconnector"
 	"go.temporal.io/sdk/client"
@@ -16,19 +17,34 @@ import (
 )
 
 // defaultNamespace is used when neither TEMPORAL_NAMESPACE nor the profile sets one.
-const defaultNamespace = "http-connector"
+const defaultNamespace = "connectors"
 
 func main() {
+	// Check the connector's configuration and the connection to Temporal before stopping on
+	// either, so one run reports every problem rather than only the first.
+	var problems []string
+	if _, err := httpconnector.New(); err != nil {
+		problems = append(problems, "Invalid connector configuration:\n"+indent(err.Error()))
+	}
 	opts, err := envconfig.LoadDefaultClientOptions()
 	if err != nil {
-		log.Fatalf("Failed to load Temporal client configuration: %v", err)
+		problems = append(problems, "Failed to load Temporal client configuration:\n"+indent(err.Error()))
 	}
 	if opts.Namespace == "" {
 		opts.Namespace = defaultNamespace
 	}
-	c, err := client.Dial(opts)
-	if err != nil {
-		log.Fatalf("Failed to create Temporal client: %v", err)
+	var c client.Client
+	if err == nil {
+		c, err = client.Dial(opts)
+		if err != nil {
+			problems = append(problems, "Failed to connect to Temporal:\n"+indent(err.Error()))
+		}
+	}
+	if len(problems) > 0 {
+		if c != nil {
+			c.Close()
+		}
+		log.Fatalf("The connector can't start:\n%s", strings.Join(problems, "\n"))
 	}
 	defer c.Close()
 
@@ -41,4 +57,9 @@ func main() {
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		log.Fatalf("Worker exited with error: %v", err)
 	}
+}
+
+// indent prefixes each line of s with "  - ", one line per problem errors.Join reported.
+func indent(s string) string {
+	return "  - " + strings.ReplaceAll(s, "\n", "\n  - ")
 }

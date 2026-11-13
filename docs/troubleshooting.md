@@ -6,6 +6,8 @@ Common errors, their causes, and fixes.
 
 **`invalid value for HTTP_CONNECTOR_RATE_LIMIT_MINUTES`** (or `MAX_DURATION_MINUTES`): the value must be a whole number of minutes, at least 1. Any other value (a float, a string, 0) causes the worker to exit before logging `Starting worker`.
 
+**`HTTP_CONNECTOR_ALLOWED_DOMAINS is required`**: the variable is unset or empty. Set it to the comma-separated domains the connector may call, or to `DISABLE ALLOWLIST` to allow any host. See [Usage — allowed domains](usage.md#allowed-domains).
+
 **`invalid domain in HTTP_CONNECTOR_ALLOWED_DOMAINS`**: each entry must be a bare domain with no scheme, port, path, or wildcard — for example `api.stripe.com`, not `https://api.stripe.com` or `*.stripe.com`. An empty entry (a trailing comma) also fails.
 
 ## Every call fails at once
@@ -16,7 +18,7 @@ Common errors, their causes, and fixes.
 
 **`scheme must be http or https`**: the URL uses a scheme the connector does not support, such as `ftp://`.
 
-**`domain "..." is not on the connector's list of allowed domains`**: `HTTP_CONNECTOR_ALLOWED_DOMAINS` is set and the request URL's host is not on it. Add the domain to the list or remove the restriction. See [Usage — allowed domains](usage.md#allowed-domains).
+**`domain "..." is not on the connector's list of allowed domains`**: `HTTP_CONNECTOR_ALLOWED_DOMAINS` is set and the request URL's host is not on it. Add the domain to the list, or set the variable to `DISABLE ALLOWLIST`. See [Usage — allowed domains](usage.md#allowed-domains).
 
 ## Calls never make progress
 

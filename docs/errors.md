@@ -69,4 +69,4 @@ The connector does not schedule a retry that would start after the caller's oper
 - **No early wake-up.** When a rate-limited key clears, waiting requests still wait until their next scheduled retry rather than waking immediately.
 - **Text bodies only.** Bodies are JSON strings, so binary content would need base64 encoding.
 - **Response size limit.** The whole response body is returned in the activity result. A body over 2 MiB fails with `ClientError`. A smaller body near Temporal's default payload limit (2 MB) may also fail to be returned.
-- **Any URL, unless limited.** Without `HTTP_CONNECTOR_ALLOWED_DOMAINS`, the connector calls any `http` or `https` URL, including addresses on its own internal network. Set the allowed domains list in environments where that matters.
+- **Any URL, if the allowlist is disabled.** With `HTTP_CONNECTOR_ALLOWED_DOMAINS=DISABLE ALLOWLIST`, the connector calls any `http` or `https` URL, including addresses on its own internal network. List the allowed domains instead in environments where that matters.

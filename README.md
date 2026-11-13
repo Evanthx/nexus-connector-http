@@ -100,7 +100,8 @@ Java. See [Typed clients](docs/clients.md).
 stop just before your operation's timeout. See [Errors, timeouts, and rate limiting](docs/errors.md).
 
 **Can I stop the connector from calling arbitrary hosts?**
-Yes: set `HTTP_CONNECTOR_ALLOWED_DOMAINS`. See [Allowed domains](docs/usage.md#allowed-domains).
+Yes, and by default it must: `HTTP_CONNECTOR_ALLOWED_DOMAINS` is required and lists the domains it
+may call. Set it to `DISABLE ALLOWLIST` to allow any host. See [Allowed domains](docs/usage.md#allowed-domains).
 
 ## Documentation
 

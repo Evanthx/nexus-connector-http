@@ -8,17 +8,27 @@ import (
 
 // AllowedDomainsEnvVar names the environment variable on the connector worker that limits which
 // hosts requests can go to: a comma-separated list of domains, such as
-// "temporal.io, api.stripe.com". A domain allows itself and its subdomains. Unset or empty, any
-// host is allowed. When redirects are followed (AllowRedirectsEnvVar), every redirect is checked
-// too: one to a host that isn't allowed isn't followed.
+// "temporal.io, api.stripe.com". A domain allows itself and its subdomains. It is required: unset
+// or empty, the worker doesn't start. Set to DisableAllowlist, any host is allowed. When redirects
+// are followed (AllowRedirectsEnvVar), every redirect is checked too: one to a host that isn't
+// allowed isn't followed.
 const AllowedDomainsEnvVar = "HTTP_CONNECTOR_ALLOWED_DOMAINS"
 
+// DisableAllowlist, as the whole value of AllowedDomainsEnvVar (case and surrounding spaces
+// ignored), turns the allowlist off, so the connector calls any host.
+const DisableAllowlist = "DISABLE ALLOWLIST"
+
 // allowedDomains reads the domains from AllowedDomainsEnvVar, lower case and without spaces. nil
-// means any host is allowed. An entry that isn't a bare domain, such as one with a scheme, port,
-// path or wildcard, or an empty entry, is an error.
+// means any host is allowed, which only DisableAllowlist gives. An unset or empty value, an entry
+// that isn't a bare domain, such as one with a scheme, port, path or wildcard, or an empty entry,
+// is an error.
 func allowedDomains() ([]string, error) {
-	v := os.Getenv(AllowedDomainsEnvVar)
-	if strings.TrimSpace(v) == "" {
+	v := strings.TrimSpace(os.Getenv(AllowedDomainsEnvVar))
+	if v == "" {
+		return nil, fmt.Errorf("%s is required: set it to a comma-separated list of the domains the connector may call, such as \"example.com, api.example.org\", or to %q to allow any host",
+			AllowedDomainsEnvVar, DisableAllowlist)
+	}
+	if strings.EqualFold(v, DisableAllowlist) {
 		return nil, nil
 	}
 	var domains []string
@@ -53,7 +63,7 @@ func isDomain(d string) bool {
 }
 
 // CheckDomain reports an error if rawURL's host isn't allowed by AllowedDomainsEnvVar: it must be
-// one of the domains or a subdomain of one. With no domains set, every host is allowed. The
+// one of the domains or a subdomain of one. With the allowlist disabled, every host is allowed. The
 // sendRequest operation calls it before starting the activity, and SendRequest before sending.
 func (a *HTTPActivities) CheckDomain(rawURL string) error {
 	if a.domains == nil {
@@ -71,7 +81,7 @@ func (a *HTTPActivities) CheckDomain(rawURL string) error {
 }
 
 // allowedHost reports whether host, from normalHost, is one of the allowed domains or a subdomain
-// of one. With no domains set, every host is allowed.
+// of one. With the allowlist disabled (nil domains), every host is allowed.
 func (a *HTTPActivities) allowedHost(host string) bool {
 	if a.domains == nil {
 		return true

@@ -51,6 +51,7 @@ func TestActivityOptions_ScheduleToClose(t *testing.T) {
 
 // New reads the maximum from the environment, 25 hours if unset, and fails on an invalid one.
 func TestNew_MaxDuration(t *testing.T) {
+	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
 	t.Setenv(MaxDurationEnvVar, "")
 	a, err := New()
 	require.NoError(t, err)

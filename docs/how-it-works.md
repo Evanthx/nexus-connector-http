@@ -5,7 +5,7 @@ Architecture overview, package guide, the path of a request through the code, ch
 ## Architecture
 
 ```
- namespace: http-testcaller              namespace: http-connector
+ namespace: http-testcaller              namespace: connectors
 ┌─────────────────────────┐   Nexus    ┌────────────────────────────────────┐
 │ CallerWorkflow          │──────────▶ │ HTTPService.sendRequest            │
 │  ExecuteOperation(      │ http-      │   └─ starts standalone activity    │
@@ -30,7 +30,7 @@ At the top level, `http.nexusrpc.yaml` is the contract and `endpoint-description
 
 ## Path of a request
 
-1. **Registration.** `cmd/worker` creates a worker on the `nexus-connector-http` task queue and calls `httpconnector.Register`. `Register` creates one `HTTPActivities` value (which owns the rate-limit cache) and registers both the `HTTPService` Nexus service and its `SendRequest` activity with it, so every call on the worker shares one cache. It reads `HTTP_CONNECTOR_RATE_LIMIT_MINUTES`, `HTTP_CONNECTOR_ALLOWED_DOMAINS`, and `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, and exits on an invalid value.
+1. **Registration.** `cmd/worker` creates a worker on the `nexus-connector-http` task queue and calls `httpconnector.Register`. `Register` creates one `HTTPActivities` value (which owns the rate-limit cache) and registers both the `HTTPService` Nexus service and its `SendRequest` activity with it, so every call on the worker shares one cache. It reads `HTTP_CONNECTOR_RATE_LIMIT_MINUTES`, `HTTP_CONNECTOR_ALLOWED_DOMAINS`, and `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, and fails on an invalid value or an unset `HTTP_CONNECTOR_ALLOWED_DOMAINS`. `cmd/worker` first calls `httpconnector.New` and dials Temporal, and reports every failure from both before exiting.
 
 2. **Decoding.** The caller's request arrives through the endpoint. The generated `UnmarshalJSON` decodes it into a `SendRequestInput`, rejecting anything the contract does not allow.
 

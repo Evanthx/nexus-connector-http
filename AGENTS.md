@@ -51,8 +51,10 @@ all retrying.
 The worker, the test caller's worker, and the starter connect to Temporal like the `temporal` CLI,
 with `envconfig`: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, `TEMPORAL_TLS_*`,
 `TEMPORAL_PROFILE`, and the CLI's profile file. With none, `localhost:7233`. The namespace defaults
-to `http-connector` for the connector and `http-testcaller` for the test caller; give each process
-its own.
+to `connectors` for the connector and `http-testcaller` for the test caller; give each process
+its own. Any namespace works, including `default`. All Nexus connectors share `connectors` by
+default and are kept apart by task queue; this one's is the constant `nexus-connector-http`, so
+copies of it in one namespace share the same work.
 
 ## Run the connector
 
@@ -61,7 +63,7 @@ its own.
    ```bash
    temporal server start-dev \
      --dynamic-config-value activity.enableCallbacks=true \
-     --namespace http-connector --namespace http-testcaller
+     --namespace connectors --namespace http-testcaller
    ```
 
    Add `--http-port 7243` if anything will call the endpoint over plain HTTP.
@@ -70,7 +72,7 @@ its own.
 
    ```bash
    temporal operator nexus endpoint create --name http-endpoint \
-     --target-namespace http-connector --target-task-queue nexus-connector-http \
+     --target-namespace connectors --target-task-queue nexus-connector-http \
      --description-file ./endpoint-description.md
    ```
 
@@ -79,6 +81,7 @@ its own.
 3. **Export secrets, then run the worker** in the same terminal:
 
    ```bash
+   export HTTP_CONNECTOR_ALLOWED_DOMAINS="httpbin.org"   # required; or "DISABLE ALLOWLIST"
    export HTTP_CONNECTOR_SECRET_WEATHER=...   # any API keys callers will name
    go run ./cmd/worker
    ```
@@ -89,7 +92,7 @@ its own.
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the worker exit at startup. |
-   | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | Optional. Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. Unset: any host. An entry that isn't a bare domain (scheme, port, path, `*`, empty) makes the worker exit at startup. |
+   | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | **Required.** Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. `DISABLE ALLOWLIST` (`DisableAllowlist`, any case) as the whole value allows any host. Unset or empty, or an entry that isn't a bare domain (scheme, port, path, `*`, empty), makes the worker exit at startup. |
    | `TEMPORAL_*` | As above. |
 
 ## Call it
@@ -130,7 +133,7 @@ The input as JSON:
 Only a **2xx** is a result. Redirects aren't followed unless `HTTP_CONNECTOR_ALLOW_REDIRECTS` is
 true; an unfollowed 3xx is a `ClientError` with its response. When true, they follow Go's default
 policy (up to 10), except https → http, and except to a host outside
-`HTTP_CONNECTOR_ALLOWED_DOMAINS` when it is set. `Referer` is never sent on a redirect, and once a
+`HTTP_CONNECTOR_ALLOWED_DOMAINS` unless it is `DISABLE ALLOWLIST`. `Referer` is never sent on a redirect, and once a
 redirect leaves the original host and its subdomains, headers filled from a secret are dropped,
 as Go drops `Authorization` and `Cookie`. Headers with literal values follow the redirect.
 
@@ -154,17 +157,18 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   same key (URL plus username, else key variable name, else `Authorization` variable name, else
   `anon`) for the window, without sending them. Restarting the worker clears it; several workers
   each probe on their own.
-- **Without `HTTP_CONNECTOR_ALLOWED_DOMAINS`, the connector calls any URL**, including ones on its
-  own network. Tell the user if that matters where it runs. The list checks the request's URL and
+- **`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required**; the worker won't start without it. With
+  `DISABLE ALLOWLIST`, the connector calls any URL, including ones on its own network. Tell the user
+  if that matters where it runs. The list checks the request's URL and
   every followed redirect: a redirect to a host not on it isn't followed, and fails as a `ClientError`
   naming the host. It checks names, not the addresses they resolve to.
 - **Body limit 2 MiB**, and the response must fit Temporal's payload limit (2 MB by default).
 
 ## Check it is working
 
-- The worker logs `Starting worker on namespace "http-connector", task queue
-  "nexus-connector-http"`. A config error (such as a bad `HTTP_CONNECTOR_RATE_LIMIT_MINUTES`) exits
-  before that.
+- The worker logs `Starting worker on namespace "connectors", task queue
+  "nexus-connector-http"`. Before that it checks every `HTTP_CONNECTOR_*` variable and the
+  connection to Temporal, and on any failure exits with one report listing all of them.
 - Run a request end to end with the test caller (namespace `http-testcaller`), in two more
   terminals:
 
@@ -179,8 +183,8 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   `http-<Nexus request ID>`:
 
   ```bash
-  temporal activity list --namespace http-connector
-  temporal activity describe --namespace http-connector --activity-id <id>
+  temporal activity list --namespace connectors
+  temporal activity describe --namespace connectors --activity-id <id>
   ```
 
   `describe` shows the attempt, the last failure with its type and HTTP response, and the next
@@ -230,7 +234,7 @@ go test -short ./...                                           # skip the end-to
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
   the `ErrorType*` constants and `AllowedDomainsEnvVar`. `New`, `HTTPActivities`, `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
-  `InvalidRequestError`, `SecretEnvPrefix`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar` and `AllowRedirectsEnvVar` are
+  `InvalidRequestError`, `SecretEnvPrefix`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
   the connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
@@ -270,8 +274,8 @@ request through the code.
     `NextRetryDelay` 1s×2 up to 30s, counting only Transient failures in a row; the count passes
     between attempts as heartbeat details, and a RateLimited error resets it to 0.
     `rateLimitedError` waits the rest of the window. There is no loop in the activity.
-  - `allowlist.go`: `AllowedDomainsEnvVar`, read by `New()` into `HTTPActivities.domains` (nil =
-    any host); `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
+  - `allowlist.go`: `AllowedDomainsEnvVar`, read by `New()` into `HTTPActivities.domains` (required; nil,
+    from `DisableAllowlist`, = any host); `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
     operation and again by `SendRequest` before sending. Matches the lower-cased host without port
     or trailing dot, exactly or as a subdomain at a dot boundary.
   - `timeout.go`: `MaxDurationEnvVar` (default 25h, read by `New()` into

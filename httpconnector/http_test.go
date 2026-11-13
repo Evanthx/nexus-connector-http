@@ -937,3 +937,15 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+// New checks every environment variable before failing, so one error names every invalid value.
+func TestNew_ReportsEveryInvalidValue(t *testing.T) {
+	t.Setenv(RateLimitMinutesEnvVar, "0")
+	t.Setenv(AllowedDomainsEnvVar, "")
+	t.Setenv(AllowRedirectsEnvVar, "yes")
+	t.Setenv(MaxDurationEnvVar, "1h")
+	_, err := New()
+	for _, name := range []string{RateLimitMinutesEnvVar, AllowedDomainsEnvVar, AllowRedirectsEnvVar, MaxDurationEnvVar} {
+		require.ErrorContains(t, err, name)
+	}
+}

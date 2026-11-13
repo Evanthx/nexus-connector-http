@@ -78,6 +78,7 @@ func TestRateLimitWindow(t *testing.T) {
 
 // New reads the window from the environment, and fails on an invalid one.
 func TestNew_RateLimitWindow(t *testing.T) {
+	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
 	t.Setenv(RateLimitMinutesEnvVar, "3")
 	a, err := New()
 	require.NoError(t, err)

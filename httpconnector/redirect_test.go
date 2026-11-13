@@ -12,6 +12,7 @@ import (
 )
 
 func TestAllowRedirects(t *testing.T) {
+	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
 	for v, want := range map[string]bool{"": false, " ": false, "false": false, "0": false, "true": true, "TRUE": true, " 1 ": true} {
 		t.Setenv(AllowRedirectsEnvVar, v)
 		got, err := allowRedirects()

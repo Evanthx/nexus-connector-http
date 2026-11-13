@@ -79,8 +79,8 @@ temporal workflow result --namespace http-testcaller --workflow-id my-request
 While a request is being retried you can inspect it as a standalone activity:
 
 ```bash
-temporal activity list --namespace http-connector
-temporal activity describe --namespace http-connector --activity-id <activity ID from the list>
+temporal activity list --namespace connectors
+temporal activity describe --namespace connectors --activity-id <activity ID from the list>
 ```
 
 `describe` shows the attempt number, the last failure with its error type and HTTP response, and when the next attempt is scheduled.

@@ -1,4 +1,4 @@
-# nexus-connector-http
+# Outbound HTTP Connector
 
 Makes an outbound HTTP request on behalf of a caller in another namespace. The `HTTPService`
 service has one operation, `sendRequest`. It takes a description of the request (URL, method,

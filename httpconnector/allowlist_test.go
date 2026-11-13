@@ -13,9 +13,15 @@ import (
 func TestAllowedDomains(t *testing.T) {
 	for _, unset := range []string{"", "  "} {
 		t.Setenv(AllowedDomainsEnvVar, unset)
+		_, err := allowedDomains()
+		require.ErrorContains(t, err, AllowedDomainsEnvVar+" is required", "value %q", unset)
+	}
+
+	for _, disable := range []string{DisableAllowlist, " disable allowlist "} {
+		t.Setenv(AllowedDomainsEnvVar, disable)
 		domains, err := allowedDomains()
 		require.NoError(t, err)
-		require.Nil(t, domains, "value %q allows any host", unset)
+		require.Nil(t, domains, "value %q allows any host", disable)
 	}
 
 	t.Setenv(AllowedDomainsEnvVar, " temporal.io,Google.com ,  stripe.com.,10.0.0.5")
@@ -25,7 +31,7 @@ func TestAllowedDomains(t *testing.T) {
 
 	for _, bad := range []string{
 		"temporal.io,", "a.com,,b.com", "https://temporal.io", "temporal.io:443", "temporal.io/docs",
-		"*.temporal.io", ".temporal.io", "temporal..io", "temporal io",
+		"*.temporal.io", ".temporal.io", "temporal..io", "temporal io", "temporal.io," + DisableAllowlist,
 	} {
 		t.Setenv(AllowedDomainsEnvVar, bad)
 		_, err := allowedDomains()
@@ -42,6 +48,10 @@ func TestNew_AllowedDomains(t *testing.T) {
 	t.Setenv(AllowedDomainsEnvVar, "https://temporal.io")
 	_, err = New()
 	require.Error(t, err)
+
+	t.Setenv(AllowedDomainsEnvVar, "")
+	_, err = New()
+	require.ErrorContains(t, err, AllowedDomainsEnvVar+" is required")
 }
 
 func TestCheckDomain(t *testing.T) {

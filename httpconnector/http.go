@@ -33,30 +33,22 @@ const TaskQueue = "nexus-connector-http"
 // Register one instance per worker, so every call on that worker shares the cache.
 type HTTPActivities struct {
 	lim            *limiter
-	domains        []string      // allowed domains; nil allows any host
+	domains        []string      // allowed domains; nil allows any host (DisableAllowlist)
 	allowRedirects bool          // whether redirects are followed
 	maxTotal       time.Duration // the longest a call may take in all
 }
 
 // New returns HTTPActivities with an empty rate-limit cache, whose window it reads from
 // RateLimitMinutesEnvVar, the allowed domains from AllowedDomainsEnvVar, whether to follow
-// redirects from AllowRedirectsEnvVar, and the longest a call may take from MaxDurationEnvVar. An
-// invalid value of any of them is an error.
+// redirects from AllowRedirectsEnvVar, and the longest a call may take from MaxDurationEnvVar. It
+// checks every one of them, so the error, made with errors.Join, names every invalid value at
+// once.
 func New() (*HTTPActivities, error) {
-	window, err := rateLimitWindow()
-	if err != nil {
-		return nil, err
-	}
-	domains, err := allowedDomains()
-	if err != nil {
-		return nil, err
-	}
-	redirects, err := allowRedirects()
-	if err != nil {
-		return nil, err
-	}
-	maxDuration, err := readMaxDuration()
-	if err != nil {
+	window, windowErr := rateLimitWindow()
+	domains, domainsErr := allowedDomains()
+	redirects, redirectsErr := allowRedirects()
+	maxDuration, maxDurationErr := readMaxDuration()
+	if err := errors.Join(windowErr, domainsErr, redirectsErr, maxDurationErr); err != nil {
 		return nil, err
 	}
 	a := newWithWindow(window)

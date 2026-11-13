@@ -24,7 +24,7 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
-const connectorNamespace = "http-connector"
+const connectorNamespace = "connectors"
 
 // TestEndToEnd runs the connector and the test caller in separate namespaces on a dev server, as
 // the README describes, and makes requests through the Nexus endpoint. It needs the temporal CLI
