@@ -44,42 +44,60 @@ func parseDomains(name, v string, showEntries bool) ([]string, error) {
 	var domains []string
 	for i, entry := range strings.Split(v, ",") {
 		d := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(entry)), ".")
-		if !isDomain(d) {
+		if problem := domainProblem(d); problem != "" {
 			bad := fmt.Sprintf("entry %d", i+1)
 			if showEntries {
 				bad = fmt.Sprintf("%q", strings.TrimSpace(entry))
+			} else if problem == problemCharacter {
+				problem += " (is a secret in this variable by mistake?)"
 			}
-			return nil, fmt.Errorf("%s must be a comma-separated list of domains, such as \"example.com, api.example.org\"; %s isn't a domain",
-				name, bad)
+			return nil, fmt.Errorf("%s must be a comma-separated list of domains, such as \"example.com, api.example.org\"; %s isn't a domain: %s",
+				name, bad, problem)
 		}
 		domains = append(domains, d)
 	}
 	return domains, nil
 }
 
-// isDomain reports whether d, in lower case, is a domain name or IPv4 address: at least two
-// dot-separated labels of letters, digits and hyphens. A single label, such as a top-level domain
-// like "com", isn't one: it would allow every host under it. A last label of only digits makes d
-// an IPv4 address, as in a URL, so it must be a complete one: "10.0" or "0.5" isn't a domain.
-func isDomain(d string) bool {
-	if !strings.Contains(d, ".") {
-		return false
+// problemCharacter is domainProblem's reason for a character no domain has.
+const problemCharacter = "it has a character other than letters, digits, hyphens and dots"
+
+// domainProblem says why d, in lower case, isn't a domain name or IPv4 address, or is "" if it is
+// one: at least two dot-separated labels of letters, digits and hyphens. A single label, such as a
+// top-level domain like "com", isn't one: it would allow every host under it. A last label of only
+// digits makes d an IPv4 address, as in a URL, so it must be a complete one: "10.0" or "0.5" isn't
+// a domain. The reason never quotes d, which can be a secret put in the wrong variable.
+func domainProblem(d string) string {
+	switch {
+	case d == "":
+		return "it is empty"
+	case strings.Contains(d, "://"):
+		return "it has a scheme, such as https://; give the host alone"
+	case strings.Contains(d, "*"):
+		return "it has a wildcard; a domain already allows its subdomains"
+	case strings.ContainsAny(d, "/?#"):
+		return "it has a path; give the host alone"
+	case strings.Contains(d, ":"):
+		return "it has a port, or is an IPv6 address, which can't be listed"
+	case strings.ContainsAny(d, " \t"):
+		return "it has a space; separate entries with commas"
+	case strings.Trim(d, "abcdefghijklmnopqrstuvwxyz0123456789.-") != "":
+		return problemCharacter
+	case !strings.Contains(d, "."):
+		return "it is a single label, such as com or localhost, which would allow every host under it; give at least two, such as example.com"
 	}
 	if last := d[strings.LastIndexByte(d, '.')+1:]; last != "" && strings.Trim(last, "0123456789") == "" {
-		ip, err := netip.ParseAddr(d)
-		return err == nil && ip.Is4()
+		if ip, err := netip.ParseAddr(d); err != nil || !ip.Is4() {
+			return "it ends in a number, so it is read as an IPv4 address, but isn't a complete one, such as 10.0.0.5"
+		}
+		return ""
 	}
 	for label := range strings.SplitSeq(d, ".") {
 		if label == "" {
-			return false
-		}
-		for _, c := range label {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-				return false
-			}
+			return "it has an empty label, such as a leading dot or two dots in a row"
 		}
 	}
-	return true
+	return ""
 }
 
 // CheckDomain reports an error if rawURL's host isn't allowed by AllowedDomainsEnvVar: it must be

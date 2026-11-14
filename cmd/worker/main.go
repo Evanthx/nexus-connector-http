@@ -23,7 +23,8 @@ func main() {
 	// Check the connector's configuration and the connection to Temporal before stopping on
 	// either, so one run reports every problem rather than only the first.
 	var problems []string
-	if _, err := httpconnector.New(); err != nil {
+	connector, err := httpconnector.New()
+	if err != nil {
 		problems = append(problems, "Invalid connector configuration:\n"+indent(err.Error()))
 	}
 	opts, err := envconfig.LoadDefaultClientOptions()
@@ -53,6 +54,9 @@ func main() {
 		log.Fatalf("Failed to configure the connector: %v", err)
 	}
 
+	for _, line := range connector.Describe() {
+		log.Print(line)
+	}
 	log.Printf("Starting worker on namespace %q, task queue %q", opts.Namespace, httpconnector.TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		log.Fatalf("Worker exited with error: %v", err)

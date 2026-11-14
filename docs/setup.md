@@ -48,7 +48,15 @@ export HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS=api.weatherapi.com   # each with th
 go run ./cmd/worker
 ```
 
-The worker logs `Starting worker on namespace "connectors", task queue "nexus-connector-http"`. Before that line, the worker checks every `HTTP_CONNECTOR_*` variable and tries to connect to Temporal. If anything fails (such as a non-integer `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` and an unreachable server), it exits with one report listing every problem, so you can fix them all at once.
+The worker logs what it will allow, then `Starting worker on namespace "connectors", task queue "nexus-connector-http"`:
+
+```
+Only calls to these domains are allowed (HTTP_CONNECTOR_ALLOWED_DOMAINS): api.weatherapi.com, httpbin.org
+Secret HTTP_CONNECTOR_SECRET_WEATHER may be sent to: api.weatherapi.com
+Starting worker on namespace "connectors", task queue "nexus-connector-http"
+```
+
+With the allowlist disabled, the first line is `Calls to any domain are allowed: the allowlist is disabled (HTTP_CONNECTOR_ALLOWED_DOMAINS is "DISABLE ALLOWLIST")`. A secret whose list is `DISABLE ALLOWLIST` may be sent to `any allowed domain`, or to `any host` when the allowlist is disabled too. With no secrets, the second line is `Secrets: none`. Only names and domains are logged, never a secret's value. Before that line, the worker checks every `HTTP_CONNECTOR_*` variable and tries to connect to Temporal. If anything fails (such as a non-integer `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` and an unreachable server), it exits with one report listing every problem, so you can fix them all at once.
 
 ## Environment variables
 

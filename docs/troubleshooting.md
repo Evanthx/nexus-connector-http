@@ -10,6 +10,10 @@ Common errors, their causes, and fixes.
 
 **`HTTP_CONNECTOR_SECRET_X needs HTTP_CONNECTOR_SECRET_X_DOMAINS`**: every secret variable needs a list of the hosts it may be sent to. Set `HTTP_CONNECTOR_SECRET_X_DOMAINS`, such as `api.example.com`. See [Usage — API keys and secrets](usage.md#api-keys-and-secrets).
 
+**`HTTP_CONNECTOR_SECRET_X_DOMAIN looks like a misspelling of HTTP_CONNECTOR_SECRET_X_DOMAINS`**: a list's name ends in `_DOMAINS`, plural. Rename the variable.
+
+**`HTTP_CONNECTOR_SECRET_X_DOMAINS must be a comma-separated list of domains ...; entry N isn't a domain: ...`**: the reason says what is wrong with that entry, such as a scheme (`https://`), a port, a path, a wildcard, a single label like `localhost`, or a partial IPv4 address. A secret's list doesn't quote the entry, in case a secret was put there by mistake; a reason about characters other than letters, digits, hyphens and dots usually means exactly that.
+
 **`HTTP_CONNECTOR_SECRET_X_DOMAINS is set, but HTTP_CONNECTOR_SECRET_X, the secret it is for, is unset or empty`**: the list's name doesn't match a secret. Check the spelling of both, and that the secret is exported in the worker's environment.
 
 **`invalid domain in HTTP_CONNECTOR_ALLOWED_DOMAINS`**: each entry must be a bare domain of at least two labels, with no scheme, port, path, or wildcard — for example `api.stripe.com`, not `https://api.stripe.com`, `*.stripe.com`, or `com`. An empty entry (a trailing comma) also fails.

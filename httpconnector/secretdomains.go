@@ -43,6 +43,11 @@ func readSecretDomains(environ []string) (map[string][]string, error) {
 	for _, name := range slices.Sorted(maps.Keys(secretVars)) {
 		listVar := name + SecretDomainsSuffix
 		v, ok := lists[name]
+		if base, typo := strings.CutSuffix(name, "_DOMAIN"); typo && !ok && secretVars[base] {
+			errs = append(errs, fmt.Errorf("%s looks like a misspelling of %s: a list's name ends in %s",
+				name, base+SecretDomainsSuffix, SecretDomainsSuffix))
+			continue
+		}
 		if !ok || strings.TrimSpace(v) == "" {
 			errs = append(errs, fmt.Errorf("%s needs %s: set it to the domains the secret may be sent to, such as \"api.example.com\", or to %q to allow any host the connector may call",
 				name, listVar, DisableAllowlist))

@@ -170,8 +170,12 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
 
 ## Check it is working
 
-- The worker logs `Starting worker on namespace "connectors", task queue
-  "nexus-connector-http"`. Before that it checks every `HTTP_CONNECTOR_*` variable and the
+- The worker logs its setup, then `Starting worker on namespace "connectors", task queue
+  "nexus-connector-http"`. The setup is the allowlist (`Only calls to these domains are allowed
+  (HTTP_CONNECTOR_ALLOWED_DOMAINS): ...`, or `Calls to any domain are allowed: the allowlist is
+  disabled ...`), then one line per secret
+  (`Secret HTTP_CONNECTOR_SECRET_STRIPE may be sent to: api.stripe.com`, or `any allowed domain` /
+  `any host` for `DISABLE ALLOWLIST`), or `Secrets: none`. It names variables, never values. Before that it checks every `HTTP_CONNECTOR_*` variable and the
   connection to Temporal, and on any failure exits with one report listing all of them.
 - Run a request end to end with the test caller (namespace `http-testcaller`), in two more
   terminals:
@@ -238,7 +242,7 @@ go test -short ./...                                           # skip the end-to
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
   the `ErrorType*` constants and `AllowedDomainsEnvVar`. `New`, `HTTPActivities`, `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
-  `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
+  `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `Describe`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
   the connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.

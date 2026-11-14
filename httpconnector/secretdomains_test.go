@@ -211,3 +211,43 @@ func TestSendRequest_HeaderNamesDifferingInCaseRefused(t *testing.T) {
 	req.Headers.AdditionalProperties = map[string]string{"X-Mode": "a", "x-mode": "b"}
 	require.Error(t, Validate(req))
 }
+
+// A bad entry in a secret's list is explained without being quoted, since it can be a secret.
+func TestParseDomains_SaysWhatIsWrong(t *testing.T) {
+	for entry, want := range map[string]string{
+		"https://api.example.com": "has a scheme",
+		"api.example.com/v1":      "has a path",
+		"api.example.com:443":     "has a port",
+		"*.example.com":           "has a wildcard",
+		"api example.com":         "has a space",
+		"intranet":                "is a single label",
+		"192.168":                 "isn't a complete one",
+		".example.com":            "has an empty label",
+		"sk_live_abc123":          "is a secret in this variable by mistake?",
+		"api.example.com,":        "entry 2 isn't a domain: it is empty",
+	} {
+		_, err := parseDomains("HTTP_CONNECTOR_SECRET_X_DOMAINS", entry, false)
+		require.ErrorContains(t, err, want, entry)
+		require.NotContains(t, err.Error(), strings.TrimSuffix(entry, ","), "the entry isn't quoted")
+	}
+	// The allowlist holds no secrets, so it quotes the entry, with the same reason.
+	_, err := parseDomains(AllowedDomainsEnvVar, "https://api.example.com", true)
+	require.ErrorContains(t, err, `"https://api.example.com" isn't a domain: it has a scheme`)
+}
+
+// _DOMAIN for _DOMAINS is reported as a misspelling, not as a secret needing a list of its own.
+func TestReadSecretDomains_SingularSuffixIsAMisspelling(t *testing.T) {
+	_, err := readSecretDomains([]string{
+		"HTTP_CONNECTOR_SECRET_GOOGLE=AIza",
+		"HTTP_CONNECTOR_SECRET_GOOGLE_DOMAIN=googleapis.com",
+	})
+	require.ErrorContains(t, err, "HTTP_CONNECTOR_SECRET_GOOGLE_DOMAIN looks like a misspelling of HTTP_CONNECTOR_SECRET_GOOGLE_DOMAINS")
+	require.NotContains(t, err.Error(), "_DOMAIN_DOMAINS")
+
+	// A secret whose own name ends in _DOMAIN, with its list, is fine.
+	_, err = readSecretDomains([]string{
+		"HTTP_CONNECTOR_SECRET_CUSTOM_DOMAIN=v",
+		"HTTP_CONNECTOR_SECRET_CUSTOM_DOMAIN_DOMAINS=api.example.com",
+	})
+	require.NoError(t, err)
+}
