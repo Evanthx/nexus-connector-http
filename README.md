@@ -107,7 +107,10 @@ may call. Set it to `DISABLE ALLOWLIST` to allow any host. See [Allowed domains]
 ## Documentation
 
 - [Setup](docs/setup.md): prerequisites, starting Temporal, creating the Nexus endpoint, running the
-  worker, environment variables, and connecting to Temporal Cloud.
+  worker, environment variables, and connecting to Temporal Cloud. To work out and test the
+  environment variables in a form, run `make configui` and open <http://localhost:8090>: its
+  **Test** checks every variable as the worker does at startup, the connection to Temporal and the
+  Nexus endpoint, and can send a test request (see [Setup page](docs/setup.md#setup-page)).
 - [Usage](docs/usage.md): calling the connector from a workflow, every request option, API keys and
   secrets, and allowed domains.
 - [Typed clients](docs/clients.md): the contract, and generating clients for Go, Python, TypeScript,

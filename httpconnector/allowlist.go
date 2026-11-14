@@ -3,7 +3,6 @@ package httpconnector
 import (
 	"fmt"
 	"net/netip"
-	"os"
 	"strings"
 )
 
@@ -18,19 +17,6 @@ const AllowedDomainsEnvVar = "HTTP_CONNECTOR_ALLOWED_DOMAINS"
 // DisableAllowlist, as the whole value of AllowedDomainsEnvVar (case and surrounding spaces
 // ignored), turns the allowlist off, so the connector calls any host.
 const DisableAllowlist = "DISABLE ALLOWLIST"
-
-// allowedDomains reads the domains from AllowedDomainsEnvVar, lower case and without spaces. nil
-// means any host is allowed, which only DisableAllowlist gives. An unset or empty value, an entry
-// that isn't a bare domain, such as one with a scheme, port, path or wildcard, or an empty entry,
-// is an error.
-func allowedDomains() ([]string, error) {
-	v := strings.TrimSpace(os.Getenv(AllowedDomainsEnvVar))
-	if v == "" {
-		return nil, fmt.Errorf("%s is required: set it to a comma-separated list of the domains the connector may call, such as \"example.com, api.example.org\", or to %q to allow any host",
-			AllowedDomainsEnvVar, DisableAllowlist)
-	}
-	return parseDomains(AllowedDomainsEnvVar, v, true)
-}
 
 // parseDomains reads v, the value of the variable name, as a list of domains: DisableAllowlist,
 // which gives nil, or comma-separated domains, lower case and without spaces. An entry that isn't

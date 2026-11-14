@@ -3,7 +3,7 @@
 //
 // It connects with the standard Temporal client configuration: the TEMPORAL_* environment
 // variables and the profile file the temporal CLI uses. The namespace defaults to
-// connectors.
+// connectors. Every variable it reads is listed in httpconnector.Settings.
 package main
 
 import (
@@ -11,13 +11,10 @@ import (
 	"strings"
 
 	"github.com/temporalio/nexus-connector-http/httpconnector"
+	"github.com/temporalio/nexus-connector-http/settings"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/envconfig"
 	"go.temporal.io/sdk/worker"
 )
-
-// defaultNamespace is used when neither TEMPORAL_NAMESPACE nor the profile sets one.
-const defaultNamespace = "connectors"
 
 func main() {
 	// Check the connector's configuration and the connection to Temporal before stopping on
@@ -27,12 +24,9 @@ func main() {
 	if err != nil {
 		problems = append(problems, "Invalid connector configuration:\n"+indent(err.Error()))
 	}
-	opts, err := envconfig.LoadDefaultClientOptions()
+	opts, err := httpconnector.ClientOptions(settings.OS())
 	if err != nil {
 		problems = append(problems, "Failed to load Temporal client configuration:\n"+indent(err.Error()))
-	}
-	if opts.Namespace == "" {
-		opts.Namespace = defaultNamespace
 	}
 	var c client.Client
 	if err == nil {

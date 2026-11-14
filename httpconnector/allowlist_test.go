@@ -8,24 +8,25 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
+	"github.com/temporalio/nexus-connector-http/settings"
 )
 
 func TestAllowedDomains(t *testing.T) {
 	for _, unset := range []string{"", "  "} {
 		t.Setenv(AllowedDomainsEnvVar, unset)
-		_, err := allowedDomains()
+		_, err := allowedDomainsSetting.Get(settings.OS())
 		require.ErrorContains(t, err, AllowedDomainsEnvVar+" is required", "value %q", unset)
 	}
 
 	for _, disable := range []string{DisableAllowlist, " disable allowlist "} {
 		t.Setenv(AllowedDomainsEnvVar, disable)
-		domains, err := allowedDomains()
+		domains, err := allowedDomainsSetting.Get(settings.OS())
 		require.NoError(t, err)
 		require.Nil(t, domains, "value %q allows any host", disable)
 	}
 
 	t.Setenv(AllowedDomainsEnvVar, " temporal.io,Google.com ,  stripe.com.,10.0.0.5")
-	domains, err := allowedDomains()
+	domains, err := allowedDomainsSetting.Get(settings.OS())
 	require.NoError(t, err)
 	require.Equal(t, []string{"temporal.io", "google.com", "stripe.com", "10.0.0.5"}, domains)
 
@@ -37,7 +38,7 @@ func TestAllowedDomains(t *testing.T) {
 		"0.5", "10.0", "168.0.5", "300.1.1.1", "1.2.3.4.5", "example.123",
 	} {
 		t.Setenv(AllowedDomainsEnvVar, bad)
-		_, err := allowedDomains()
+		_, err := allowedDomainsSetting.Get(settings.OS())
 		require.ErrorContains(t, err, AllowedDomainsEnvVar, "value %q", bad)
 	}
 }

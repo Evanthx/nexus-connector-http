@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/temporalio/nexus-connector-http/settings"
 )
 
 func TestLimiterTTL(t *testing.T) {
@@ -60,18 +61,18 @@ func TestLimiterMarkEvictsExpired(t *testing.T) {
 
 func TestRateLimitWindow(t *testing.T) {
 	t.Setenv(RateLimitMinutesEnvVar, "")
-	window, err := rateLimitWindow()
+	window, err := rateLimitSetting.Get(settings.OS())
 	require.NoError(t, err)
 	require.Equal(t, 5*time.Minute, window, "unset defaults to 5 minutes")
 
 	t.Setenv(RateLimitMinutesEnvVar, "2")
-	window, err = rateLimitWindow()
+	window, err = rateLimitSetting.Get(settings.OS())
 	require.NoError(t, err)
 	require.Equal(t, 2*time.Minute, window)
 
 	for _, bad := range []string{"0", "-1", "1.5", "five", " 2"} {
 		t.Setenv(RateLimitMinutesEnvVar, bad)
-		_, err := rateLimitWindow()
+		_, err := rateLimitSetting.Get(settings.OS())
 		require.ErrorContains(t, err, RateLimitMinutesEnvVar, "value %q", bad)
 	}
 }

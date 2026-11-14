@@ -9,12 +9,12 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
+	"github.com/temporalio/nexus-connector-http/settings"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -25,14 +25,15 @@ const SecretEnvPrefix = "HTTP_CONNECTOR_SECRET_"
 
 // Validate reports why req can't be made, or nil if it can. The operation calls it before starting
 // the activity, so a bad request fails at once without an activity.
+// It reads any secret req names from the process's environment.
 func Validate(req httpapi.SendRequestInput) error {
-	_, err := build(context.Background(), req)
+	_, err := build(context.Background(), settings.OS(), req)
 	return err
 }
 
-// build turns req into an HTTP request, resolving any API key from the worker's environment. An
-// error means the request can't be made as given.
-func build(ctx context.Context, req httpapi.SendRequestInput) (*http.Request, error) {
+// build turns req into an HTTP request, reading any secret it names from env. An error means the
+// request can't be made as given.
+func build(ctx context.Context, env settings.Env, req httpapi.SendRequestInput) (*http.Request, error) {
 	u, err := parseURL(req.URL)
 	if err != nil {
 		return nil, err
@@ -40,7 +41,7 @@ func build(ctx context.Context, req httpapi.SendRequestInput) (*http.Request, er
 	if err := checkTimeouts(req); err != nil {
 		return nil, err
 	}
-	headerKey, err := setQuery(u, req)
+	headerKey, err := setQuery(u, env, req)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +53,7 @@ func build(ctx context.Context, req httpapi.SendRequestInput) (*http.Request, er
 	if err != nil {
 		return nil, fmt.Errorf("can't build the request: %w", err)
 	}
-	if err := setHeaders(httpReq, req, headerKey); err != nil {
+	if err := setHeaders(httpReq, env, req, headerKey); err != nil {
 		return nil, err
 	}
 	return httpReq, nil
@@ -84,7 +85,7 @@ func checkTimeouts(req httpapi.SendRequestInput) error {
 
 // setQuery adds req's query parameters to u's, and its API key if it goes in the query. It returns
 // the API key if it goes in the Authorization header instead.
-func setQuery(u *url.URL, req httpapi.SendRequestInput) (headerKey string, err error) {
+func setQuery(u *url.URL, env settings.Env, req httpapi.SendRequestInput) (headerKey string, err error) {
 	q := u.Query()
 	if req.QueryParams != nil {
 		for k, v := range req.QueryParams.AdditionalProperties {
@@ -104,7 +105,7 @@ func setQuery(u *url.URL, req httpapi.SendRequestInput) (headerKey string, err e
 		return "", nil
 	default:
 	}
-	secret, err := apiKey(envVar)
+	secret, err := apiKey(env, envVar)
 	if err != nil {
 		return "", err
 	}
@@ -121,7 +122,7 @@ func setQuery(u *url.URL, req httpapi.SendRequestInput) (headerKey string, err e
 // secretHeaderVars) is sent with that variable's value instead. headerKey (the API key, if it
 // doesn't go in the query) then replaces any Authorization header: the basic auth password with a
 // username, else a Bearer token.
-func setHeaders(httpReq *http.Request, req httpapi.SendRequestInput, headerKey string) error {
+func setHeaders(httpReq *http.Request, env settings.Env, req httpapi.SendRequestInput, headerKey string) error {
 	if req.Headers != nil {
 		// Names that differ only in case are one header, and only one value could be sent, chosen
 		// at random. Refuse them, so the header that is sent is the one checked (see
@@ -136,7 +137,7 @@ func setHeaders(httpReq *http.Request, req httpapi.SendRequestInput, headerKey s
 		}
 		for k, v := range req.Headers.AdditionalProperties {
 			if strings.HasPrefix(v, SecretEnvPrefix) {
-				secret, err := secretEnv(v)
+				secret, err := secretEnv(env, v)
 				if err != nil {
 					return err
 				}
@@ -167,21 +168,22 @@ func setHeaders(httpReq *http.Request, req httpapi.SendRequestInput, headerKey s
 	return nil
 }
 
-// apiKey reads the API key named by envVar. The error names the variable, never its value.
-func apiKey(envVar string) (string, error) {
+// apiKey reads the API key named by envVar from env. The error names the variable, never its
+// value.
+func apiKey(env settings.Env, envVar string) (string, error) {
 	if !strings.HasPrefix(envVar, SecretEnvPrefix) {
 		return "", fmt.Errorf("apiKeyEnvVar %q must start with %s", envVar, SecretEnvPrefix)
 	}
-	return secretEnv(envVar)
+	return secretEnv(env, envVar)
 }
 
-// secretEnv reads the secret environment variable envVar. The error names the variable, never its
-// value.
-func secretEnv(envVar string) (string, error) {
+// secretEnv reads the secret variable envVar from env, through secretsFamily, which reads only
+// variables starting with SecretEnvPrefix. The error names the variable, never its value.
+func secretEnv(env settings.Env, envVar string) (string, error) {
 	if strings.HasSuffix(envVar, SecretDomainsSuffix) {
 		return "", fmt.Errorf("%q lists the domains a secret may be sent to; it isn't a secret", envVar)
 	}
-	secret := os.Getenv(envVar)
+	secret, _ := secretsFamily.Lookup(env, envVar)
 	if secret == "" {
 		return "", fmt.Errorf("environment variable %q is unset or empty on the connector worker", envVar)
 	}
@@ -214,14 +216,14 @@ func authorizationEnvVar(req httpapi.SendRequestInput) string {
 	return secretHeaderVars(req)["Authorization"]
 }
 
-// secrets are the values of req's secret variables that are set: its API key (and, with a
+// secrets are the values of req's secret variables that are set in env: its API key (and, with a
 // username, the encoded basic auth credentials it is part of), and each variable a header names
 // along with that value's credentials without the scheme (the "abc" of "Bearer abc"), which an
 // endpoint can echo alone.
-func secrets(req httpapi.SendRequestInput) []string {
+func secrets(env settings.Env, req httpapi.SendRequestInput) []string {
 	var values []string
 	if envVar := value(req.APIKeyEnvVar); strings.HasPrefix(envVar, SecretEnvPrefix) {
-		if v := os.Getenv(envVar); v != "" {
+		if v, _ := secretsFamily.Lookup(env, envVar); v != "" {
 			values = append(values, v)
 			if user := value(req.Username); user != "" {
 				values = append(values, base64.StdEncoding.EncodeToString([]byte(user+":"+v)))
@@ -229,7 +231,7 @@ func secrets(req httpapi.SendRequestInput) []string {
 		}
 	}
 	for _, envVar := range secretHeaderVars(req) {
-		if v := os.Getenv(envVar); v != "" {
+		if v, _ := secretsFamily.Lookup(env, envVar); v != "" {
 			values = append(values, v)
 			if _, credentials, ok := strings.Cut(v, " "); ok && credentials != "" {
 				values = append(values, credentials)

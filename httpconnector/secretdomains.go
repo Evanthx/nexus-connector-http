@@ -18,8 +18,9 @@ import (
 // a list, never a secret.
 const SecretDomainsSuffix = "_DOMAINS"
 
-// readSecretDomains reads, for each secret variable in environ (name=value pairs, as os.Environ
-// returns them), the domains in its SecretDomainsSuffix variable. A secret variable is one that
+// readSecretDomains reads, for each secret variable in environ (name=value pairs, as
+// settings.Env.Environ returns them), the domains in its SecretDomainsSuffix variable. It is
+// secretsFamily's check, so New runs it through Settings. A secret variable is one that
 // starts with SecretEnvPrefix, doesn't end with SecretDomainsSuffix, and isn't empty. A nil list,
 // from DisableAllowlist, allows any host the allowlist allows. It reports every secret without a
 // valid list, and every list whose secret is unset or empty, in one error. The error names
@@ -96,6 +97,27 @@ func (a *HTTPActivities) CheckSecretDomains(req httpapi.SendRequestInput) error 
 			errs = append(errs, fmt.Errorf("%s has no %s on the connector worker, so it isn't sent", name, name+SecretDomainsSuffix))
 		case !hostIn(host, domains):
 			errs = append(errs, fmt.Errorf("%s may not be sent to %q: it isn't in %s", name, host, name+SecretDomainsSuffix))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// CheckSecretsAllowed reports each domain in a secret's SecretDomainsSuffix list that the allowed
+// domains (AllowedDomainsEnvVar) don't hold: the connector never calls it, so the secret is never
+// sent there, which usually means one of the two lists is wrong. With the allowlist disabled, or a
+// secret's list DisableAllowlist, there is nothing to report. The worker starts either way; the
+// setup page's Test reports it. The error names variables and domains, never a value.
+func (a *HTTPActivities) CheckSecretsAllowed() error {
+	if a.domains == nil {
+		return nil
+	}
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(a.secretDomains)) {
+		for _, d := range a.secretDomains[name] {
+			if !hostIn(d, a.domains) {
+				errs = append(errs, fmt.Errorf("%s lists %q, which isn't within %s, so the connector won't call it",
+					name+SecretDomainsSuffix, d, AllowedDomainsEnvVar))
+			}
 		}
 	}
 	return errors.Join(errs...)

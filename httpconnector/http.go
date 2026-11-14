@@ -13,13 +13,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
+	"github.com/temporalio/nexus-connector-http/settings"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
@@ -40,33 +40,38 @@ type HTTPActivities struct {
 	// secretDomains maps each secret variable to the domains it may be sent to (SecretDomainsSuffix);
 	// a nil list allows any allowed host. A variable not in it isn't sent anywhere.
 	secretDomains map[string][]string
+	// env is where secrets are read from when a request names one: the process's environment,
+	// unless NewWithEnv was given another.
+	env settings.Env
 }
 
-// New returns HTTPActivities with an empty rate-limit cache, whose window it reads from
-// RateLimitMinutesEnvVar, the allowed domains from AllowedDomainsEnvVar, whether to follow
-// redirects from AllowRedirectsEnvVar, the longest a call may take from MaxDurationEnvVar, and the
-// domains each secret variable may be sent to from its SecretDomainsSuffix variable. It
-// checks every one of them, so the error, made with errors.Join, names every invalid value at
-// once.
+// New returns HTTPActivities configured from the process's environment: see NewWithEnv.
 func New() (*HTTPActivities, error) {
-	window, windowErr := rateLimitWindow()
-	domains, domainsErr := allowedDomains()
-	redirects, redirectsErr := allowRedirects()
-	maxDuration, maxDurationErr := readMaxDuration()
-	secretDomains, secretDomainsErr := readSecretDomains(os.Environ())
-	if err := errors.Join(windowErr, domainsErr, redirectsErr, maxDurationErr, secretDomainsErr); err != nil {
+	return NewWithEnv(settings.OS())
+}
+
+// NewWithEnv returns HTTPActivities with an empty rate-limit cache, configured from env through
+// Settings: the rate-limit window from RateLimitMinutesEnvVar, the allowed domains from
+// AllowedDomainsEnvVar, whether to follow redirects from AllowRedirectsEnvVar, the longest a call
+// may take from MaxDurationEnvVar, and the domains each secret variable may be sent to from its
+// SecretDomainsSuffix variable. Requests' secrets are read from env too. It checks every variable,
+// so the error names every invalid value at once, one per line.
+func NewWithEnv(env settings.Env) (*HTTPActivities, error) {
+	vals, err := Settings.Load(env)
+	if err != nil {
 		return nil, err
 	}
-	a := newWithWindow(window)
-	a.domains = domains
-	a.allowRedirects = redirects
-	a.maxTotal = maxDuration
-	a.secretDomains = secretDomains
+	a := newWithWindow(rateLimitSetting.From(vals))
+	a.domains = allowedDomainsSetting.From(vals)
+	a.allowRedirects = allowRedirectsSetting.From(vals)
+	a.maxTotal = maxDurationSetting.From(vals)
+	a.secretDomains = secretsFamily.From(vals)
+	a.env = env
 	return a, nil
 }
 
 func newWithWindow(window time.Duration) *HTTPActivities {
-	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration, secretDomains: map[string][]string{}}
+	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration, secretDomains: map[string][]string{}, env: settings.OS()}
 }
 
 // Register registers the HTTPService Nexus service and the SendRequest activity its operation
@@ -93,7 +98,7 @@ func Register(w worker.Registry) error {
 			req httpapi.SendRequestInput,
 			opts temporalnexus.StartTemporalOperationOptions,
 		) (temporalnexus.TemporalOperationResult[httpapi.SendRequestOutput], error) {
-			err := Validate(req)
+			_, err := build(ctx, a.env, req)
 			if err == nil {
 				err = a.CheckDomain(req.URL)
 			}
@@ -189,7 +194,7 @@ func categorizeError(status int) string {
 func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
 	logger := activity.GetLogger(ctx)
 
-	httpReq, err := build(ctx, req)
+	httpReq, err := build(ctx, a.env, req)
 	if err == nil {
 		err = a.CheckDomain(req.URL)
 	}
@@ -206,7 +211,7 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 		return httpapi.SendRequestOutput{}, rateLimitedError(ctx, fmt.Sprintf("rate limited (cached) for %s", key), wait, nil)
 	}
 
-	secrets := secrets(req)
+	secrets := secrets(a.env, req)
 	start := time.Now()
 	resp, err := (&http.Client{Timeout: timeout(req), CheckRedirect: a.checkRedirect(secretHeaderVars(req))}).Do(httpReq)
 	if err != nil {

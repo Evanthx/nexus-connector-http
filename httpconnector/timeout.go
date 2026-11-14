@@ -20,11 +20,6 @@ const defaultMaxDuration = 25 * time.Hour
 // activity and to deliver the completion callback.
 const callbackMargin = 10 * time.Second
 
-// readMaxDuration reads the maximum from MaxDurationEnvVar.
-func readMaxDuration() (time.Duration, error) {
-	return envMinutes(MaxDurationEnvVar, defaultMaxDuration)
-}
-
 // ScheduleToClose is how long the call for req may take in all, including every retry and
 // rate-limit wait. operationTimeout is the operation-timeout header, the time the caller's Nexus
 // operation has left, which its server sets when the operation has a timeout; empty means it has

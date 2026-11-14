@@ -9,19 +9,20 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
+	"github.com/temporalio/nexus-connector-http/settings"
 )
 
 func TestAllowRedirects(t *testing.T) {
 	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
 	for v, want := range map[string]bool{"": false, " ": false, "false": false, "0": false, "true": true, "TRUE": true, " 1 ": true} {
 		t.Setenv(AllowRedirectsEnvVar, v)
-		got, err := allowRedirects()
+		got, err := allowRedirectsSetting.Get(settings.OS())
 		require.NoError(t, err, "value %q", v)
 		require.Equal(t, want, got, "value %q", v)
 	}
 	for _, bad := range []string{"yes", "on", "WHITELISTED"} {
 		t.Setenv(AllowRedirectsEnvVar, bad)
-		_, err := allowRedirects()
+		_, err := allowRedirectsSetting.Get(settings.OS())
 		require.ErrorContains(t, err, AllowRedirectsEnvVar, "value %q", bad)
 		_, err = New()
 		require.Error(t, err, "New with value %q", bad)

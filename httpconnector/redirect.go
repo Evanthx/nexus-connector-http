@@ -3,9 +3,6 @@ package httpconnector
 import (
 	"fmt"
 	"net/http"
-	"os"
-	"strconv"
-	"strings"
 )
 
 // AllowRedirectsEnvVar names the environment variable on the connector worker that decides whether
@@ -13,19 +10,6 @@ import (
 // they don't, even within the same host, and a 3xx fails as a ClientError with its response, so
 // the caller can see its Location. When true, see checkRedirect.
 const AllowRedirectsEnvVar = "HTTP_CONNECTOR_ALLOW_REDIRECTS"
-
-// allowRedirects reads AllowRedirectsEnvVar. A value that isn't a boolean is an error.
-func allowRedirects() (bool, error) {
-	v := strings.TrimSpace(os.Getenv(AllowRedirectsEnvVar))
-	if v == "" {
-		return false, nil
-	}
-	allow, err := strconv.ParseBool(v)
-	if err != nil {
-		return false, fmt.Errorf("%s must be true or false; got %q", AllowRedirectsEnvVar, v)
-	}
-	return allow, nil
-}
 
 // checkRedirect returns the http.Client CheckRedirect policy for a request whose secretHeaders,
 // from secretHeaderVars, were filled from the connector's secret variables.

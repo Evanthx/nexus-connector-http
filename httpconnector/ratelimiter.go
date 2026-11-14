@@ -1,9 +1,6 @@
 package httpconnector
 
 import (
-	"fmt"
-	"os"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -12,30 +9,11 @@ import (
 // many minutes a key stays rate-limited after a 429. It must be a whole number, at least 1.
 const RateLimitMinutesEnvVar = "HTTP_CONNECTOR_RATE_LIMIT_MINUTES"
 
-// defaultRateLimitWindow is the window when RateLimitMinutesEnvVar is unset or empty.
+// defaultRateLimitWindow is the window when RateLimitMinutesEnvVar is unset or empty. A live entry
+// blocks every caller with that key for the window, so the endpoint is probed about once per
+// window: the waiting requests all retry when it ends, and if the first one's 429 comes back before
+// the others check, they wait another window. Requests that check at the same moment all go out.
 const defaultRateLimitWindow = 5 * time.Minute
-
-// rateLimitWindow reads the window from RateLimitMinutesEnvVar. A live entry blocks every
-// caller with that key for the window, so the endpoint is probed about once per window: the
-// waiting requests all retry when it ends, and if the first one's 429 comes back before the
-// others check, they wait another window. Requests that check at the same moment all go out.
-func rateLimitWindow() (time.Duration, error) {
-	return envMinutes(RateLimitMinutesEnvVar, defaultRateLimitWindow)
-}
-
-// envMinutes reads the environment variable name as a whole number of minutes, at least 1, or
-// def if it is unset or empty.
-func envMinutes(name string, def time.Duration) (time.Duration, error) {
-	v := os.Getenv(name)
-	if v == "" {
-		return def, nil
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 {
-		return 0, fmt.Errorf("%s must be a whole number of minutes, at least 1; got %q", name, v)
-	}
-	return time.Duration(n) * time.Minute, nil
-}
 
 // limiter is an in-process, TTL-based rate-limit cache shared by every SendRequest
 // attempt on this worker: a key is "limited" until its entry expires. It is
