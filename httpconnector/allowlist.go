@@ -14,8 +14,8 @@ import (
 // allowed isn't followed.
 const AllowedDomainsEnvVar = "HTTP_CONNECTOR_ALLOWED_DOMAINS"
 
-// DisableAllowlist, as the whole value of AllowedDomainsEnvVar (case and surrounding spaces
-// ignored), turns the allowlist off, so the connector calls any host.
+// DisableAllowlist is the value of AllowedDomainsEnvVar that turns the allowlist off, so the
+// connector calls any host. It must be the whole value; case and surrounding spaces are ignored.
 const DisableAllowlist = "DISABLE ALLOWLIST"
 
 // parseDomains reads v, the value of the variable name, as a list of domains: DisableAllowlist,

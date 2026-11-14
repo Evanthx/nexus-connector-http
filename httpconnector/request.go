@@ -127,13 +127,8 @@ func setHeaders(httpReq *http.Request, env settings.Env, req httpapi.SendRequest
 		// Names that differ only in case are one header, and only one value could be sent, chosen
 		// at random. Refuse them, so the header that is sent is the one checked (see
 		// CheckSecretDomains) and redacted (see secrets).
-		seen := make(map[string]string, len(req.Headers.AdditionalProperties))
-		for _, k := range slices.Sorted(maps.Keys(req.Headers.AdditionalProperties)) {
-			canonical := http.CanonicalHeaderKey(k)
-			if other, ok := seen[canonical]; ok {
-				return fmt.Errorf("headers %q and %q are the same header; send it once", other, k)
-			}
-			seen[canonical] = k
+		if err := checkDuplicateHeaders(req.Headers.AdditionalProperties); err != nil {
+			return err
 		}
 		for k, v := range req.Headers.AdditionalProperties {
 			if strings.HasPrefix(v, SecretEnvPrefix) {
@@ -153,9 +148,28 @@ func setHeaders(httpReq *http.Request, env settings.Env, req httpapi.SendRequest
 			httpReq.Header.Set("Authorization", "Bearer "+headerKey)
 		}
 	}
-	// The transport would reject these too, but only when sending, as a retryable error. The
-	// error names the header, never its value, which can be a secret.
-	for k, vs := range httpReq.Header {
+	return checkHeaderSyntax(httpReq.Header)
+}
+
+// checkDuplicateHeaders refuses names in headers that differ only in case: they are one header,
+// and only one value could be sent.
+func checkDuplicateHeaders(headers map[string]string) error {
+	seen := make(map[string]string, len(headers))
+	for _, k := range slices.Sorted(maps.Keys(headers)) {
+		canonical := http.CanonicalHeaderKey(k)
+		if other, ok := seen[canonical]; ok {
+			return fmt.Errorf("headers %q and %q are the same header; send it once", other, k)
+		}
+		seen[canonical] = k
+	}
+	return nil
+}
+
+// checkHeaderSyntax refuses an invalid header name or value. The transport would reject these
+// too, but only when sending, as a retryable error. The error names the header, never its value,
+// which can be a secret.
+func checkHeaderSyntax(h http.Header) error {
+	for k, vs := range h {
 		if !httpguts.ValidHeaderFieldName(k) {
 			return fmt.Errorf("invalid header name %q", k)
 		}

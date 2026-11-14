@@ -97,6 +97,7 @@ func (a *HTTPActivities) CheckSecretDomains(req httpapi.SendRequestInput) error 
 			errs = append(errs, fmt.Errorf("%s has no %s on the connector worker, so it isn't sent", name, name+SecretDomainsSuffix))
 		case !hostIn(host, domains):
 			errs = append(errs, fmt.Errorf("%s may not be sent to %q: it isn't in %s", name, host, name+SecretDomainsSuffix))
+		default: // the host is on the secret's list
 		}
 	}
 	return errors.Join(errs...)
