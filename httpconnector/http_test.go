@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,17 @@ import (
 )
 
 const testSecretVar = SecretEnvPrefix + "TEST"
+
+// anySecretHost lets a send each secret variable set now to any host, for the tests that aren't
+// about where secrets may go (see secretdomains_test.go). It returns a.
+func anySecretHost(a *HTTPActivities) *HTTPActivities {
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, SecretEnvPrefix) {
+			a.secretDomains[name] = nil
+		}
+	}
+	return a
+}
 
 // testWindow is the rate-limit window the tests use, independent of the environment.
 const testWindow = 2 * time.Minute
@@ -331,7 +343,7 @@ func TestSendRequest_InvalidBeatsRateLimit(t *testing.T) {
 func TestSendRequest_GateBlocksWhenCached(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	srv, hits := countingServer(t, 200, "")
-	a := newWithWindow(testWindow)
+	a := anySecretHost(newWithWindow(testWindow))
 	req := httpapi.SendRequestInput{URL: srv.URL, Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}
 	a.lim.mark(RateLimitKey(req), time.Now().Add(-20*time.Second)) // 20s of the window gone
 
@@ -410,7 +422,7 @@ func TestSendRequest_429LimitsOnlyItsOwnKey(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	a := newWithWindow(testWindow)
+	a := anySecretHost(newWithWindow(testWindow))
 	bobOnA := httpapi.SendRequestInput{URL: srv.URL + "/a", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}
 
 	_, err := runSendRequest(t, a, bobOnA)
@@ -595,7 +607,7 @@ func TestSendRequest_AuthorizationFromEnvVar(t *testing.T) {
 		testSecretVar:    "Bearer s3cr3t",
 		"Bearer literal": "Bearer literal",
 	} {
-		_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+		_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 			URL:     srv.URL,
 			Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"authorization": header}},
 		})
@@ -616,7 +628,7 @@ func TestSendRequest_APIKeyAsQueryParam(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -634,7 +646,7 @@ func TestSendRequest_NetworkErrorHidesAPIKey(t *testing.T) {
 	srv := httptest.NewServer(nil)
 	srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -655,7 +667,7 @@ func TestSendRequest_RedirectErrorHidesAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -686,7 +698,7 @@ func TestSendRequest_NoRedirectFromHTTPSToHTTP(t *testing.T) {
 	srv := httptest.NewTLSServer(http.RedirectHandler(plain.URL, http.StatusFound))
 	defer srv.Close()
 	trustTLS(t, srv)
-	a := newWithWindow(testWindow)
+	a := anySecretHost(newWithWindow(testWindow))
 	a.allowRedirects = true
 
 	_, err := runSendRequest(t, a, httpapi.SendRequestInput{
@@ -719,7 +731,7 @@ func TestSendRequest_RedactsEchoedSecrets(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -740,7 +752,7 @@ func TestSendRequest_RedactsAuthorizationCredentials(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	out, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:     srv.URL,
 		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"Authorization": testSecretVar}},
 	})
@@ -757,7 +769,7 @@ func TestSendRequest_RedirectErrorHidesQuotedAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -814,7 +826,7 @@ func TestSendRequest_APIKeyAsBearerHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
 	require.NoError(t, err)
 	require.Equal(t, "Bearer s3cr3t", <-got)
 }
@@ -836,7 +848,7 @@ func TestSendRequest_BasicAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:          srv.URL,
 		Username:     new("bob"),
 		APIKeyEnvVar: new(testSecretVar),

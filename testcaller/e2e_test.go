@@ -66,6 +66,11 @@ func TestEndToEnd(t *testing.T) {
 
 	// The httptest servers listen on 127.0.0.1, so only they are allowed.
 	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1")
+	// One secret may go to the httptest servers, the other only to a host they aren't.
+	t.Setenv(httpconnector.SecretEnvPrefix+"LOCAL", "l0cal")
+	t.Setenv(httpconnector.SecretEnvPrefix+"LOCAL"+httpconnector.SecretDomainsSuffix, "127.0.0.1")
+	t.Setenv(httpconnector.SecretEnvPrefix+"ELSEWHERE", "elsewh3re")
+	t.Setenv(httpconnector.SecretEnvPrefix+"ELSEWHERE"+httpconnector.SecretDomainsSuffix, "api.example.com")
 	connectorWorker := worker.New(connectorClient, httpconnector.TaskQueue, worker.Options{})
 	require.NoError(t, httpconnector.Register(connectorWorker))
 	require.NoError(t, connectorWorker.Start())
@@ -213,6 +218,35 @@ func TestEndToEnd(t *testing.T) {
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
 		require.Contains(t, appErr.Message(), "scheme must be http or https")
+	})
+
+	t.Run("secret is sent to a host in its list", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, r.Header.Get("Authorization"))
+		}))
+		defer srv.Close()
+		resp, err := call(t, httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(httpconnector.SecretEnvPrefix + "LOCAL")})
+		require.NoError(t, err)
+		// The server got the key; the connector redacts it where the server echoes it back.
+		require.Equal(t, "Bearer [REDACTED]", resp.Body)
+	})
+
+	t.Run("secret not sent to a host outside its list, rejected when the operation starts", func(t *testing.T) {
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+		defer srv.Close()
+		_, err := call(t, httpapi.SendRequestInput{URL: srv.URL, Headers: &httpapi.SendRequestInputHeaders{
+			AdditionalProperties: map[string]string{"X-Api-Key": httpconnector.SecretEnvPrefix + "ELSEWHERE"},
+		}})
+		var handlerErr *nexus.HandlerError
+		require.ErrorAs(t, err, &handlerErr)
+		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)
+		var appErr *temporal.ApplicationError
+		require.ErrorAs(t, err, &appErr)
+		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
+		require.Contains(t, appErr.Message(), httpconnector.SecretEnvPrefix+`ELSEWHERE may not be sent to "127.0.0.1"`)
+		require.NotContains(t, appErr.Message(), "elsewh3re")
+		require.Zero(t, hits.Load(), "nothing sent")
 	})
 
 	t.Run("domain not allowed fails when the operation starts", func(t *testing.T) {

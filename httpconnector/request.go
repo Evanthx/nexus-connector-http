@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,6 +123,17 @@ func setQuery(u *url.URL, req httpapi.SendRequestInput) (headerKey string, err e
 // username, else a Bearer token.
 func setHeaders(httpReq *http.Request, req httpapi.SendRequestInput, headerKey string) error {
 	if req.Headers != nil {
+		// Names that differ only in case are one header, and only one value could be sent, chosen
+		// at random. Refuse them, so the header that is sent is the one checked (see
+		// CheckSecretDomains) and redacted (see secrets).
+		seen := make(map[string]string, len(req.Headers.AdditionalProperties))
+		for _, k := range slices.Sorted(maps.Keys(req.Headers.AdditionalProperties)) {
+			canonical := http.CanonicalHeaderKey(k)
+			if other, ok := seen[canonical]; ok {
+				return fmt.Errorf("headers %q and %q are the same header; send it once", other, k)
+			}
+			seen[canonical] = k
+		}
 		for k, v := range req.Headers.AdditionalProperties {
 			if strings.HasPrefix(v, SecretEnvPrefix) {
 				secret, err := secretEnv(v)
@@ -165,6 +178,9 @@ func apiKey(envVar string) (string, error) {
 // secretEnv reads the secret environment variable envVar. The error names the variable, never its
 // value.
 func secretEnv(envVar string) (string, error) {
+	if strings.HasSuffix(envVar, SecretDomainsSuffix) {
+		return "", fmt.Errorf("%q lists the domains a secret may be sent to; it isn't a secret", envVar)
+	}
 	secret := os.Getenv(envVar)
 	if secret == "" {
 		return "", fmt.Errorf("environment variable %q is unset or empty on the connector worker", envVar)

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -36,11 +37,15 @@ type HTTPActivities struct {
 	domains        []string      // allowed domains; nil allows any host (DisableAllowlist)
 	allowRedirects bool          // whether redirects are followed
 	maxTotal       time.Duration // the longest a call may take in all
+	// secretDomains maps each secret variable to the domains it may be sent to (SecretDomainsSuffix);
+	// a nil list allows any allowed host. A variable not in it isn't sent anywhere.
+	secretDomains map[string][]string
 }
 
 // New returns HTTPActivities with an empty rate-limit cache, whose window it reads from
 // RateLimitMinutesEnvVar, the allowed domains from AllowedDomainsEnvVar, whether to follow
-// redirects from AllowRedirectsEnvVar, and the longest a call may take from MaxDurationEnvVar. It
+// redirects from AllowRedirectsEnvVar, the longest a call may take from MaxDurationEnvVar, and the
+// domains each secret variable may be sent to from its SecretDomainsSuffix variable. It
 // checks every one of them, so the error, made with errors.Join, names every invalid value at
 // once.
 func New() (*HTTPActivities, error) {
@@ -48,18 +53,20 @@ func New() (*HTTPActivities, error) {
 	domains, domainsErr := allowedDomains()
 	redirects, redirectsErr := allowRedirects()
 	maxDuration, maxDurationErr := readMaxDuration()
-	if err := errors.Join(windowErr, domainsErr, redirectsErr, maxDurationErr); err != nil {
+	secretDomains, secretDomainsErr := readSecretDomains(os.Environ())
+	if err := errors.Join(windowErr, domainsErr, redirectsErr, maxDurationErr, secretDomainsErr); err != nil {
 		return nil, err
 	}
 	a := newWithWindow(window)
 	a.domains = domains
 	a.allowRedirects = redirects
 	a.maxTotal = maxDuration
+	a.secretDomains = secretDomains
 	return a, nil
 }
 
 func newWithWindow(window time.Duration) *HTTPActivities {
-	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration}
+	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration, secretDomains: map[string][]string{}}
 }
 
 // Register registers the HTTPService Nexus service and the SendRequest activity its operation
@@ -67,7 +74,8 @@ func newWithWindow(window time.Duration) *HTTPActivities {
 // cache. It fails if one of the environment variables New reads is invalid.
 //
 // The sendRequest operation rejects a request that can't be made, whose host isn't an allowed
-// domain (see CheckDomain), or for which the caller's Nexus operation has too little time left
+// domain (see CheckDomain), that names a secret its host may not be sent (see CheckSecretDomains),
+// or for which the caller's Nexus operation has too little time left
 // (see ScheduleToClose), with a BadRequest handler error, without starting an activity; otherwise
 // it starts SendRequest as a standalone activity that ends shortly before the operation times out.
 // The activity ID comes from the Nexus request ID, so a retried start of the same operation
@@ -88,6 +96,9 @@ func Register(w worker.Registry) error {
 			err := Validate(req)
 			if err == nil {
 				err = a.CheckDomain(req.URL)
+			}
+			if err == nil {
+				err = a.CheckSecretDomains(req)
 			}
 			var total time.Duration
 			if err == nil {
@@ -167,8 +178,8 @@ func categorizeError(status int) string {
 
 // SendRequest makes one HTTP attempt per activity attempt:
 //
-//   - A request that can't be made, or whose host isn't an allowed domain, fails with
-//     InvalidRequest, without being sent.
+//   - A request that can't be made, whose host isn't an allowed domain, or that names a secret
+//     its host may not be sent, fails with InvalidRequest, without being sent.
 //   - If another call for the same rate-limit key got a 429 within the last window, it fails with
 //     RateLimited without being sent, and the next attempt waits for the rest of the window.
 //   - Otherwise it is sent, and the response's status decides the result (see ApplyStatus). 2xx
@@ -181,6 +192,9 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 	httpReq, err := build(ctx, req)
 	if err == nil {
 		err = a.CheckDomain(req.URL)
+	}
+	if err == nil {
+		err = a.CheckSecretDomains(req)
 	}
 	if err != nil {
 		return httpapi.SendRequestOutput{}, InvalidRequestError(err)

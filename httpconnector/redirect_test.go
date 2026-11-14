@@ -59,7 +59,7 @@ func TestSendRequest_HeaderNamesSecret(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:     srv.URL,
 		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"x-api-key": testSecretVar}},
 	})
@@ -67,7 +67,7 @@ func TestSendRequest_HeaderNamesSecret(t *testing.T) {
 	require.NoError(t, appErr(t, err).Details(&out))
 	require.Equal(t, "got [REDACTED]", out.Body, "the secret was sent, and its echo redacted")
 
-	_, err = runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	_, err = runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
 		URL:     srv.URL,
 		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"X-Api-Key": SecretEnvPrefix + "UNSET"}},
 	})
@@ -109,7 +109,7 @@ func TestSendRequest_RedirectDropsSecretsOffSite(t *testing.T) {
 		keep   bool
 	}{{"same host", onSite, true}, {"other host", offSite, false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newWithWindow(testWindow)
+			a := anySecretHost(newWithWindow(testWindow))
 			a.allowRedirects = true
 			_, err := runSendRequest(t, a, httpapi.SendRequestInput{
 				URL:          redirectingServer(t, tc.target).URL,
@@ -143,7 +143,7 @@ func TestSendRequest_RedirectBackDoesNotRestoreSecrets(t *testing.T) {
 	target := recordingServer(t, got)
 	bounce := redirectingServer(t, target.URL+"/landing") // on 127.0.0.1
 	offSite := strings.Replace(bounce.URL, "127.0.0.1", "localhost", 1)
-	a := newWithWindow(testWindow)
+	a := anySecretHost(newWithWindow(testWindow))
 	a.allowRedirects = true
 
 	_, err := runSendRequest(t, a, httpapi.SendRequestInput{

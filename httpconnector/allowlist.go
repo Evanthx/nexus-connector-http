@@ -29,15 +29,28 @@ func allowedDomains() ([]string, error) {
 		return nil, fmt.Errorf("%s is required: set it to a comma-separated list of the domains the connector may call, such as \"example.com, api.example.org\", or to %q to allow any host",
 			AllowedDomainsEnvVar, DisableAllowlist)
 	}
+	return parseDomains(AllowedDomainsEnvVar, v, true)
+}
+
+// parseDomains reads v, the value of the variable name, as a list of domains: DisableAllowlist,
+// which gives nil, or comma-separated domains, lower case and without spaces. An entry that isn't
+// a bare domain (see isDomain), or an empty entry, is an error, which quotes the entry only if
+// showEntries is set.
+func parseDomains(name, v string, showEntries bool) ([]string, error) {
+	v = strings.TrimSpace(v)
 	if strings.EqualFold(v, DisableAllowlist) {
 		return nil, nil
 	}
 	var domains []string
-	for entry := range strings.SplitSeq(v, ",") {
+	for i, entry := range strings.Split(v, ",") {
 		d := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(entry)), ".")
 		if !isDomain(d) {
-			return nil, fmt.Errorf("%s must be a comma-separated list of domains, such as \"example.com, api.example.org\"; %q isn't a domain",
-				AllowedDomainsEnvVar, strings.TrimSpace(entry))
+			bad := fmt.Sprintf("entry %d", i+1)
+			if showEntries {
+				bad = fmt.Sprintf("%q", strings.TrimSpace(entry))
+			}
+			return nil, fmt.Errorf("%s must be a comma-separated list of domains, such as \"example.com, api.example.org\"; %s isn't a domain",
+				name, bad)
 		}
 		domains = append(domains, d)
 	}
@@ -90,10 +103,16 @@ func (a *HTTPActivities) CheckDomain(rawURL string) error {
 // allowedHost reports whether host, from normalHost, is one of the allowed domains or a subdomain
 // of one. With the allowlist disabled (nil domains), every host is allowed.
 func (a *HTTPActivities) allowedHost(host string) bool {
-	if a.domains == nil {
+	return hostIn(host, a.domains)
+}
+
+// hostIn reports whether host, from normalHost, is one of domains or a subdomain of one. nil, from
+// DisableAllowlist, holds every host.
+func hostIn(host string, domains []string) bool {
+	if domains == nil {
 		return true
 	}
-	for _, d := range a.domains {
+	for _, d := range domains {
 		if isDomainOrSubdomain(host, d) {
 			return true
 		}

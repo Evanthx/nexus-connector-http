@@ -83,8 +83,9 @@ the connector, and access is granted per endpoint. The trade-off is a Nexus call
 request.
 
 **How do I set the `Authorization` header on outgoing requests?**
-Export the key on the connector worker in a variable named `HTTP_CONNECTOR_SECRET_<NAME>`, and name
-that variable in the request's `apiKeyEnvVar`. The connector sends it as a `Bearer` token, or as
+Export the key on the connector worker in a variable named `HTTP_CONNECTOR_SECRET_<NAME>`, with
+`HTTP_CONNECTOR_SECRET_<NAME>_DOMAINS` listing the hosts it may be sent to, and name that variable
+in the request's `apiKeyEnvVar`. The connector sends it as a `Bearer` token, or as
 the basic auth password when the request has a `username`. For any other scheme, put the whole
 header value (such as `Basic <base64>`) in the variable and set the request's `Authorization`
 header to the variable's name. The key never enters the request or workflow history. See

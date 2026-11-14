@@ -82,13 +82,15 @@ copies of it in one namespace share the same work.
 
    ```bash
    export HTTP_CONNECTOR_ALLOWED_DOMAINS="httpbin.org"   # required; or "DISABLE ALLOWLIST"
-   export HTTP_CONNECTOR_SECRET_WEATHER=...   # any API keys callers will name
+   export HTTP_CONNECTOR_SECRET_WEATHER=...   # any API keys callers will name,
+   export HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS=api.weatherapi.com   # each with its hosts
    go run ./cmd/worker
    ```
 
    | Variable | Value |
    |---|---|
    | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as any header's whole value. |
+   | `HTTP_CONNECTOR_SECRET_*_DOMAINS` | **Required for each secret.** Where it may be sent: a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS` (domains with their subdomains, exact IPv4 addresses, or `DISABLE ALLOWLIST` for any allowed host). A secret without one, or one whose secret is unset or empty, makes the worker exit at startup. A `_DOMAINS` variable is never a secret. |
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the worker exit at startup. |
    | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the worker exit at startup. |
@@ -150,7 +152,9 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   `apiKeyEnvVar`, or as any header's whole value, such as `Authorization` or `X-Api-Key` (the
   variable then holds the whole header value, scheme included, e.g. `Bearer ...` or
   `Basic <base64>` for Stripe-style auth). Any other header value is sent and stored in workflow
-  history as is. Export the variable in the worker's environment, not the caller's.
+  history as is. Export the variable in the worker's environment, not the caller's, with its
+  `_DOMAINS` list: a request that would send it to a host not on that list fails with
+  `InvalidRequest`, unsent, so one API's key can't be sent to another allowed host.
 - **A caller with no Nexus timeout retries a failing endpoint for 25 hours** (the default
   maximum). Give the operation a short timeout when trying things out.
 - **The rate-limit cache is per worker and in memory.** A 429 holds back every request with the
@@ -199,7 +203,7 @@ callers find it with `errors.As`. For an HTTP response, `Details` holds the `Sen
 
 | Type | Cause | Retried |
 |---|---|---|
-| `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, a caller timeout under `timeoutSeconds` + 10s, a host not in the allowed domains, invalid header name or value, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
+| `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, a caller timeout under `timeoutSeconds` + 10s, a host not in the allowed domains, a secret whose `_DOMAINS` list doesn't hold the host, invalid header name or value, two header names differing only in case, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
 | `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a redirect to a host not in the allowed domains (message `redirected to "<host>", which is not on the connector's list of allowed domains`, details the 3xx with its `Location`); a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
 | `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 1s×2 up to 30s |
 | `RateLimited` | 429, or the key is in the rate-limit cache. | After the window |
@@ -234,7 +238,7 @@ go test -short ./...                                           # skip the end-to
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
   the `ErrorType*` constants and `AllowedDomainsEnvVar`. `New`, `HTTPActivities`, `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
-  `InvalidRequestError`, `SecretEnvPrefix`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
+  `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
   the connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
@@ -242,7 +246,8 @@ go test -short ./...                                           # skip the end-to
   rate-limit cache is shared. Keep that.
 - A secret value must never enter the request, history, the rate-limit key, error messages, or
   logs. Any new place a response or error text reaches the caller goes through `redact` or
-  `redactResponse`.
+  `redactResponse`. Any new way for a request to name a secret must be added to
+  `requestSecretVars`, so `CheckSecretDomains` checks it against the secret's `_DOMAINS` list.
 - For a test that guards a fix, revert the fix and confirm the test fails before calling it done.
 
 ### How the code works
@@ -288,6 +293,14 @@ request through the code.
     `SendRequest` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
     entries. It takes an explicit `now`. The window is read by `httpconnector.New()`, through
     `envMinutes`, which `MaxDurationEnvVar` shares.
+- `secretdomains.go`: `SecretDomainsSuffix`; `readSecretDomains(os.Environ())`, read by `New()`
+  into `HTTPActivities.secretDomains` (secret variable → domains, nil = any allowed host; a
+  variable not in it is sent nowhere), which reports every secret without a list and every list
+  without a secret, naming variables only; `CheckSecretDomains`, called by the operation after
+  `CheckDomain` and again by `SendRequest`, which matches the host as `CheckDomain` does; and
+  `requestSecretVars`. `secretEnv` refuses a `_DOMAINS` variable as a secret. Redirects need no
+  check of their own: secrets reach only the original host and its subdomains (see `redirect.go`),
+  which the list holds since it holds the original host.
 - Secrets: `redact` replaces each secret from `secrets(req)` (including a header variable's
   credentials without the scheme, and the base64 `user:key` for basic auth) raw,
   URL-escaped, Go-quoted and JSON-escaped, in transport and body-read errors and, through
@@ -317,11 +330,14 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
 - `httpconnector/` — `SendRequest` in the SDK's activity test environment against `httptest`
   servers (helpers `runSendRequest`, `appErr`, `countingServer`), plus `Validate` and
   `categorizeError`. The limiter takes an explicit `now` (`ratelimiter_test.go`). Tests use
-  `newWithWindow(testWindow)` rather than the environment variable.
+  `newWithWindow(testWindow)` rather than the environment variable; it allows no secret anywhere,
+  so tests that send secrets but aren't about their domains wrap it in `anySecretHost`.
+  `secretdomains_test.go` tries to send secrets to hosts their lists don't hold.
 - `testcaller/e2e_test.go` — starts a dev server with the `temporal` CLI (skipped if it isn't on
   the PATH, or with `-short`), creates both namespaces and the endpoint, runs both workers
   in-process, and runs `CallerWorkflow` against `httptest` servers: success, a retried 503,
   retries stopping before a 15s caller timeout with the connector's error, a caller timeout too
   short for one attempt rejected at start, a 404 `ClientError` with its response, an
-  `InvalidRequest` and a domain not allowed, both rejected at start. It sets the allowed domains
-  to `127.0.0.1`.
+  `InvalidRequest`, a domain not allowed, and a secret sent outside its `_DOMAINS` list, all
+  rejected at start, and a secret sent within its list. It sets the allowed domains to
+  `127.0.0.1`.

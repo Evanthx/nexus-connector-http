@@ -82,7 +82,7 @@ Every field of `SendRequestInput`. A request with an unknown field or an unliste
 |---|---|---|---|
 | `url` | **Yes** | | Absolute `http` or `https` URL. |
 | `method` | No | `GET` | `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, or `OPTIONS`, in upper case. |
-| `headers` | No | none | Request headers. A value that starts with `HTTP_CONNECTOR_SECRET_` names an environment variable on the connector; the connector sends its value instead. See [API keys and secrets](#api-keys-and-secrets). |
+| `headers` | No | none | Request headers; names that differ only in case are one header, so a request with both is rejected. A value that starts with `HTTP_CONNECTOR_SECRET_` names an environment variable on the connector; the connector sends its value instead. See [API keys and secrets](#api-keys-and-secrets). |
 | `queryParams` | No | none | Query parameters, added to any already in the URL. |
 | `body` | No | none | Request body, as a string. |
 | `username` | No | none | Basic auth username. The password is the API key from `apiKeyEnvVar`. Needs `apiKeyEnvVar`; cannot be combined with `apiKeyParam`. |
@@ -98,10 +98,17 @@ API keys never enter the request input or workflow history. A request names an e
 
 The variable's name must start with `HTTP_CONNECTOR_SECRET_`. Without that prefix, any caller could cause the connector to forward any environment variable (such as its Temporal API key) to a URL the caller controls.
 
+Every secret variable also needs a partner, the same name plus `_DOMAINS`, listing the hosts the secret may be sent to. Without one, the worker doesn't start. It is a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS`: comma-separated domains, each allowing itself and its subdomains, or IPv4 addresses, each allowing only itself. A request that would send a secret to any other host fails with `InvalidRequest` before anything is sent, so a caller can't send one API's key to another allowed host:
+
+```
+HTTP_CONNECTOR_SECRET_WEATHER may not be sent to "api.example.com": it isn't in HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS
+```
+
 For example, with this in the connector's terminal:
 
 ```bash
 export HTTP_CONNECTOR_SECRET_WEATHER=...
+export HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS=api.weatherapi.com
 ```
 
 a request can use it:
@@ -116,6 +123,7 @@ Any header value can also reference a secret: if the whole value starts with `HT
 
 ```bash
 export HTTP_CONNECTOR_SECRET_ITEMS_AUTH='Bearer ...'
+export HTTP_CONNECTOR_SECRET_ITEMS_AUTH_DOMAINS=api.example.com
 ```
 
 ```json
@@ -134,7 +142,17 @@ For Stripe-style auth where the key is the username and the password is empty, p
 
 ```bash
 export HTTP_CONNECTOR_SECRET_STRIPE_AUTH="Basic $(printf 'sk_live_...:' | base64)"
+export HTTP_CONNECTOR_SECRET_STRIPE_AUTH_DOMAINS=api.stripe.com
 ```
+
+A key one service uses on several domains lists them all, and a key on a host by address lists the address:
+
+```bash
+export HTTP_CONNECTOR_SECRET_GOOGLE_KEY_DOMAINS="google.com, googleapis.com"
+export HTTP_CONNECTOR_SECRET_LAN_TOKEN_DOMAINS=10.0.0.5
+```
+
+`DISABLE ALLOWLIST` as a list lets the secret go to any host `HTTP_CONNECTOR_ALLOWED_DOMAINS` allows. A variable ending in `_DOMAINS` is always a list, never a secret, and a request can't name one as a key. A list whose secret is unset or empty also stops the worker, which catches a misspelled name.
 
 Any other header value is sent as-is and stored in workflow history.
 

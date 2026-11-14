@@ -43,7 +43,8 @@ Export the domains the connector may call and any API keys it should read, then 
 
 ```bash
 export HTTP_CONNECTOR_ALLOWED_DOMAINS="httpbin.org"   # required; see below
-export HTTP_CONNECTOR_SECRET_WEATHER=...   # any secrets callers will name
+export HTTP_CONNECTOR_SECRET_WEATHER=...   # any secrets callers will name,
+export HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS=api.weatherapi.com   # each with the hosts it may go to
 go run ./cmd/worker
 ```
 
@@ -56,6 +57,7 @@ Set these on the connector worker (`cmd/worker`).
 | Variable | Meaning |
 |---|---|
 | `HTTP_CONNECTOR_SECRET_*` | API keys that requests can name in `apiKeyEnvVar`, or as the whole value of any header. See [Usage — API keys and secrets](usage.md#api-keys-and-secrets). |
+| `HTTP_CONNECTOR_SECRET_*_DOMAINS` | **Required for each secret.** The hosts that secret may be sent to, as a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS`, e.g. `HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS=api.weatherapi.com`. A secret without one, or one without its secret, stops the worker at startup. |
 | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | How long a key stays rate-limited after a 429 response, in whole minutes. Must be a whole number ≥ 1. Default 5. |
 | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | The longest the connector keeps retrying, in whole minutes, when the caller's timeout is longer or unset. Must be a whole number ≥ 1. Default 1500 (25 hours). |
 | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | `true` to follow redirects; default `false`, which follows none. See [Usage — redirects](usage.md#redirects). |
