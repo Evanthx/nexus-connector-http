@@ -23,7 +23,7 @@ func main() {
 	url := flag.String("url", "https://httpbin.org/get", "URL to request")
 	method := flag.String("method", "GET", "HTTP method")
 	body := flag.String("body", "", "Request body")
-	timeout := flag.Duration("timeout", 0, "The Nexus operation's timeout, such as 10m; the connector retries until shortly before it. 0 means none, so the connector's maximum applies (25h by default)")
+	timeout := flag.Duration("timeout", 0, "The Nexus operation's timeout, such as 10m; the Connector retries until shortly before it. 0 means none, so the Connector's maximum applies (25h by default)")
 	flag.Parse()
 
 	m := httpapi.SendRequestInputMethod(*method)

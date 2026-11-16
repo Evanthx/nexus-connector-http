@@ -27,7 +27,7 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
-// TaskQueue is the connector worker's task queue. The Nexus endpoint targets it.
+// TaskQueue is the Connector's task queue. The Nexus endpoint targets it.
 const TaskQueue = "nexus-connector-http"
 
 // HTTPActivities is the SendRequest activity plus the rate-limit cache it shares across calls.
@@ -266,7 +266,7 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 		return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
 	}
 	if len(body) > maxResponseBytes {
-		msg := fmt.Sprintf("%s returned status %d, but its body is over the connector's %d MiB limit, so the response isn't returned",
+		msg := fmt.Sprintf("%s returned status %d, but its body is over the Connector's %d MiB limit, so the response isn't returned",
 			req.URL, resp.StatusCode, maxResponseBytes>>20)
 		return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, ErrorTypeClientError,
 			temporal.ApplicationErrorOptions{NonRetryable: true})

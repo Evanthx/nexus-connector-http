@@ -5,14 +5,14 @@ import (
 	"net/http"
 )
 
-// AllowRedirectsEnvVar names the environment variable on the connector worker that decides whether
+// AllowRedirectsEnvVar names the environment variable on the Connector that decides whether
 // requests follow redirects: true or false (any value strconv.ParseBool accepts). Unset or empty,
 // they don't, even within the same host, and a 3xx fails as a ClientError with its response, so
 // the caller can see its Location. When true, see checkRedirect.
 const AllowRedirectsEnvVar = "HTTP_CONNECTOR_ALLOW_REDIRECTS"
 
 // checkRedirect returns the http.Client CheckRedirect policy for a request whose secretHeaders,
-// from secretHeaderVars, were filled from the connector's secret variables.
+// from secretHeaderVars, were filled from the Connector's secret variables.
 //
 // Unless AllowRedirectsEnvVar is true, no redirect is followed: SendRequest gets the 3xx itself as
 // the response, which fails as a ClientError. Otherwise it is http.Client's default policy (at
@@ -77,6 +77,6 @@ type redirectNotAllowedError struct {
 }
 
 func (e *redirectNotAllowedError) Error() string {
-	return fmt.Sprintf("redirected to %q, which is not on the connector's list of allowed domains (%s), so the redirect wasn't followed",
+	return fmt.Sprintf("redirected to %q, which is not on the Connector's list of allowed domains (%s), so the redirect wasn't followed",
 		e.host, AllowedDomainsEnvVar)
 }

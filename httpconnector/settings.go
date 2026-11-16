@@ -11,15 +11,15 @@ import (
 	"go.temporal.io/sdk/contrib/envconfig"
 )
 
-// This file lists every environment variable the connector reads, in the order the setup page
-// (configui) and docs/setup.md show them. New loads the connector's configuration through
+// This file lists every environment variable the Connector reads, in the order the setup page
+// (configui) and docs/setup.md show them. New loads the Connector's configuration through
 // Settings, the setup page shows it, and `make docs` generates docs/setup.md's table from it. Add
 // a new variable here only, with its help text and check, then run `make docs`.
 
-// Settings is the connector's process and every environment variable it reads.
+// Settings is the Connector's process and every environment variable it reads.
 var Settings = &settings.Program{
 	ID:      "connector",
-	Name:    "HTTP connector",
+	Name:    "Nexus Connector",
 	Command: "go run ./cmd/worker",
 	Sections: []*settings.Section{
 		{Title: "Allowed hosts", Variables: []*settings.Variable{allowedDomainsSetting.Variable}},
@@ -29,7 +29,7 @@ var Settings = &settings.Program{
 		}},
 		settings.Temporal{
 			Namespace: defaultNamespace,
-			NamespaceHelp: "The namespace the connector runs in. The Nexus endpoint must target it and the task queue " +
+			NamespaceHelp: "The namespace the Connector runs in. The Nexus endpoint must target it and the task queue " +
 				"`" + TaskQueue + "`. All connectors default to `" + defaultNamespace + "` and are kept apart by task queue.",
 			Docs: "See [Connecting to Temporal Cloud or another server](#connecting-to-temporal-cloud-or-another-server).",
 		}.Section(),
@@ -41,12 +41,12 @@ var allowedDomainsSetting = settings.Define(settings.Variable{
 	Name:     AllowedDomainsEnvVar,
 	Required: "yes",
 	Default:  "none",
-	Help: "The hosts the connector may call: a comma-separated list of domains, such as `temporal.io, api.stripe.com`; " +
+	Help: "The hosts the Connector may call: a comma-separated list of domains, such as `temporal.io, api.stripe.com`; " +
 		"spaces are ignored. Each domain allows itself and its subdomains; an IPv4 address allows only itself. " +
 		"A redirect to a host not on the list isn't followed. `" + DisableAllowlist + "` as the whole value allows " +
-		"any host, including ones on the connector's own network. Unset or empty, or an entry with a scheme, port, " +
+		"any host, including ones on the Connector's own network. Unset or empty, or an entry with a scheme, port, " +
 		"path or `*`, a single label such as `com` or `localhost`, or a partial IPv4 address such as `10.0`, " +
-		"stops the worker at startup.",
+		"stops the Connector at startup.",
 	Docs: "See [Usage — allowed domains](usage.md#allowed-domains).",
 }, parseAllowedDomains)
 
@@ -66,9 +66,9 @@ var secretsFamily = settings.DefineFamily(settings.Family{
 			Required:    "for each secret",
 			Placeholder: "api.example.com",
 			Help: "Where the secret may be sent: a list like `" + AllowedDomainsEnvVar + "`, such as `api.stripe.com`, " +
-				"or `" + DisableAllowlist + "` for any host the connector may call. A request that would send the " +
+				"or `" + DisableAllowlist + "` for any host the Connector may call. A request that would send the " +
 				"secret anywhere else fails without being sent. A secret without its list, or a list without its " +
-				"secret, stops the worker at startup. Never a secret itself.",
+				"secret, stops the Connector at startup. Never a secret itself.",
 		},
 	},
 	Help: "Secrets, such as API keys, that requests name rather than carry, each with the hosts it may be sent to. " +
@@ -107,14 +107,14 @@ var maxDurationSetting = settings.Define(settings.Variable{
 }, minutes(MaxDurationEnvVar, defaultMaxDuration))
 
 // proxyVariables are the proxy settings Go's net/http reads (http.ProxyFromEnvironment, which the
-// connector's requests use through http.DefaultTransport) and gRPC reads for the connection to
+// Connector's requests use through http.DefaultTransport) and gRPC reads for the connection to
 // Temporal (its delegating resolver calls http.ProxyFromEnvironment for an https URL of the
 // address, so it uses HTTPS_PROXY and NO_PROXY only).
 var proxyVariables = []*settings.Variable{
 	{
 		Name: "HTTPS_PROXY", Default: "none", External: "Go's HTTP client and gRPC", Aliases: []string{"https_proxy"},
 		Mask: settings.MaskURLPassword,
-		Help: "The proxy for the connector's requests to `https` URLs and for its connection to Temporal, such as " +
+		Help: "The proxy for the Connector's requests to `https` URLs and for its connection to Temporal, such as " +
 			"`http://proxy.example:8080`, or `http://user:password@proxy.example:8080` for a proxy that asks for a " +
 			"password. `" + AllowedDomainsEnvVar + "` still checks the host requested, not the proxy. Requests to " +
 			"`localhost` and loopback addresses never use a proxy.",
@@ -122,7 +122,7 @@ var proxyVariables = []*settings.Variable{
 	{
 		Name: "HTTP_PROXY", Default: "none", External: "Go's HTTP client", Aliases: []string{"http_proxy"},
 		Mask: settings.MaskURLPassword,
-		Help: "The proxy for the connector's requests to `http` URLs, in the same form as `HTTPS_PROXY`. The " +
+		Help: "The proxy for the Connector's requests to `http` URLs, in the same form as `HTTPS_PROXY`. The " +
 			"connection to Temporal doesn't use it.",
 	},
 	{
@@ -133,7 +133,7 @@ var proxyVariables = []*settings.Variable{
 	},
 }
 
-// defaultNamespace is the connector's namespace when neither TEMPORAL_NAMESPACE nor the profile
+// defaultNamespace is the Connector's namespace when neither TEMPORAL_NAMESPACE nor the profile
 // file sets one.
 const defaultNamespace = "connectors"
 
@@ -157,7 +157,7 @@ func ClientOptions(env settings.Env) (client.Options, error) {
 func parseAllowedDomains(v string) ([]string, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
-		return nil, fmt.Errorf("%s is required: set it to a comma-separated list of the domains the connector may call, such as \"example.com, api.example.org\", or to %q to allow any host",
+		return nil, fmt.Errorf("%s is required: set it to a comma-separated list of the domains the Connector may call, such as \"example.com, api.example.org\", or to %q to allow any host",
 			AllowedDomainsEnvVar, DisableAllowlist)
 	}
 	return parseDomains(AllowedDomainsEnvVar, v, true)

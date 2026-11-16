@@ -26,7 +26,7 @@ import (
 
 const connectorNamespace = "connectors"
 
-// TestEndToEnd runs the connector and the test caller in separate namespaces on a dev server, as
+// TestEndToEnd runs the Connector and the test caller in separate namespaces on a dev server, as
 // the README describes, and makes requests through the Nexus endpoint. It needs the temporal CLI
 // on the PATH.
 func TestEndToEnd(t *testing.T) {
@@ -157,13 +157,13 @@ func TestEndToEnd(t *testing.T) {
 		}
 	})
 
-	t.Run("retries stop before the caller's timeout, with the connector's error", func(t *testing.T) {
+	t.Run("retries stop before the caller's timeout, with the Connector's error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
 		defer srv.Close()
 
-		// The connector retries for 15s - 10s margin = 5s, then fails with the last 503. Had it
+		// The Connector retries for 15s - 10s margin = 5s, then fails with the last 503. Had it
 		// kept retrying, the caller would time out at 15s with no ApplicationError.
 		const timeout = 15 * time.Second
 		start := time.Now()
@@ -227,7 +227,7 @@ func TestEndToEnd(t *testing.T) {
 		defer srv.Close()
 		resp, err := call(t, httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(httpconnector.SecretEnvPrefix + "LOCAL")})
 		require.NoError(t, err)
-		// The server got the key; the connector redacts it where the server echoes it back.
+		// The server got the key; the Connector redacts it where the server echoes it back.
 		require.Equal(t, "Bearer [REDACTED]", resp.Body)
 	})
 
@@ -257,6 +257,6 @@ func TestEndToEnd(t *testing.T) {
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
-		require.Contains(t, appErr.Message(), `domain "example.com" is not on the connector's list of allowed domains`)
+		require.Contains(t, appErr.Message(), `domain "example.com" is not on the Connector's list of allowed domains`)
 	})
 }

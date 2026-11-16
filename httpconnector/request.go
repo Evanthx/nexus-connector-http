@@ -19,7 +19,7 @@ import (
 )
 
 // SecretEnvPrefix is the prefix every apiKeyEnvVar must have. Callers choose the URL and the
-// variable, so without it any caller could send any of the worker's environment variables, such
+// variable, so without it any caller could send any of the Connector's environment variables, such
 // as its Temporal API key, to a server of its choosing.
 const SecretEnvPrefix = "HTTP_CONNECTOR_SECRET_"
 
@@ -199,13 +199,13 @@ func secretEnv(env settings.Env, envVar string) (string, error) {
 	}
 	secret, _ := secretsFamily.Lookup(env, envVar)
 	if secret == "" {
-		return "", fmt.Errorf("environment variable %q is unset or empty on the connector worker", envVar)
+		return "", fmt.Errorf("environment variable %q is unset or empty on the Connector", envVar)
 	}
 	return secret, nil
 }
 
 // secretHeaderVars maps each of req's headers whose whole value starts with SecretEnvPrefix, by
-// canonical name, to the variable on the connector worker that value names. The connector sends
+// canonical name, to the variable on the Connector that value names. The Connector sends
 // the variable's value as the header instead, so the secret stays out of the request and its
 // history, and drops the header on a redirect that leaves the original site (see checkRedirect).
 func secretHeaderVars(req httpapi.SendRequestInput) map[string]string {

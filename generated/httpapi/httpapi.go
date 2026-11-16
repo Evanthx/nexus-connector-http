@@ -52,9 +52,9 @@ type SendRequestInput struct {
 	// Username Basic auth username. The password is the API key from apiKeyEnvVar, which
 	// this needs; apiKeyParam must be unset
 	Username *string `json:"username,omitempty"`
-	// APIKeyEnvVar Name of an environment variable on the connector worker that holds an
-	// API key. The name must start with HTTP_CONNECTOR_SECRET_. The value is read at call
-	// time and never enters history
+	// APIKeyEnvVar Name of an environment variable on the Connector that holds an API key.
+	// The name must start with HTTP_CONNECTOR_SECRET_. The value is read at call time and
+	// never enters history
 	APIKeyEnvVar *string `json:"apiKeyEnvVar,omitempty"`
 	// APIKeyParam Query parameter to put the API key in. If empty, the key is sent in the
 	// Authorization header: as the basic auth password if username is set, else as a
@@ -223,8 +223,8 @@ func (m SendRequestInput) MarshalJSON() ([]byte, error) {
 }
 
 // SendRequestInputHeaders Request headers. A value that starts with
-// HTTP_CONNECTOR_SECRET_ names an environment variable on the connector worker, whose
-// value is sent instead
+// HTTP_CONNECTOR_SECRET_ names an environment variable on the Connector, whose value is
+// sent instead
 type SendRequestInputHeaders struct {
 	// AdditionalProperties holds every member of this map-shaped object.
 	AdditionalProperties map[string]string

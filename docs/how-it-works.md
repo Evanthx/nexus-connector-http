@@ -15,16 +15,16 @@ Architecture overview, package guide, the path of a request through the code, ch
 └─────────────────────────┘  callback
 ```
 
-There is no workflow on the connector's side. The Nexus operation validates the request, then starts a **standalone activity** (`SendRequest`) with `temporalnexus.StartActivity`. The server retries the activity on failure. When the activity finishes (success or permanent failure), the server completes the caller's Nexus operation through a completion callback (`activity.enableCallbacks`).
+There is no workflow on the Connector's side. The Nexus operation validates the request, then starts a **standalone activity** (`SendRequest`) with `temporalnexus.StartActivity`. The server retries the activity on failure. When the activity finishes (success or permanent failure), the server completes the caller's Nexus operation through a completion callback (`activity.enableCallbacks`).
 
 ## Packages
 
 | Package | Contents |
 |---|---|
-| `httpconnector/` | All connector logic. `http.go`: `Register`, the Nexus operation, the `SendRequest` activity, `ApplyStatus`, status classification, redaction. `request.go`: building an `*http.Request`, validation, API keys, the rate-limit key. `errors.go`: error types and retry delays. `ratelimiter.go`: the in-memory rate-limit cache. `allowlist.go`: domain allow-list. `redirect.go`: the redirect policy. `timeout.go`: schedule-to-close calculation. `settings.go`: every environment variable the connector reads, with its help, default and check (`Settings`), which `New` loads through. |
+| `httpconnector/` | All connector logic. `http.go`: `Register`, the Nexus operation, the `SendRequest` activity, `ApplyStatus`, status classification, redaction. `request.go`: building an `*http.Request`, validation, API keys, the rate-limit key. `errors.go`: error types and retry delays. `ratelimiter.go`: the in-memory rate-limit cache. `allowlist.go`: domain allow-list. `redirect.go`: the redirect policy. `timeout.go`: schedule-to-close calculation. `settings.go`: every environment variable the Connector reads, with its help, default and check (`Settings`), which `New` loads through. |
 | `settings/` | Declaring and reading environment variables: `Program`, `Variable`, `Family` (such as each secret with its `_DOMAINS` list), `Env` (the process's or a map). The only code that reads the process's environment; a test fails if any other does. Also generates the tables in `docs/setup.md`. |
-| `cmd/worker/` | The connector's process: connects to Temporal, calls `httpconnector.Register`, runs the worker. |
-| `configui/` | The setup page (`make configui`): shows `httpconnector.Settings`, tests values without changing any environment, and lists the `export` lines. Not part of the connector. `configui/gendocs` writes `docs/setup.md`'s tables (`make docs`). |
+| `cmd/worker/` | The Connector's process: connects to Temporal, calls `httpconnector.Register`, runs the worker. |
+| `configui/` | The setup page (`make configui`): shows `httpconnector.Settings`, tests values without changing any environment, and lists the `export` lines. Not part of the Connector. `configui/gendocs` writes `docs/setup.md`'s tables (`make docs`). |
 | `generated/httpapi/` | Go types for the contract, generated from `http.nexusrpc.yaml` with [nexgen](https://github.com/temporalio/nexgen). Do not edit directly. |
 | `testcaller/` | Test only: `CallerWorkflow`, its worker (`worker/`), a starter (`starter/`), and the end-to-end test. |
 
@@ -62,9 +62,9 @@ The service's and operation's `fqn` values are the names callers use on the wire
 
 ## APIs that don't follow the standard
 
-The connector decides what to do from the HTTP status code alone. Most APIs follow the standard (a 429 is a rate limit, a 503 is worth retrying, a 404 is not), but some answer `200 OK` and put the real outcome — an error or a rate limit — in the body.
+The Connector decides what to do from the HTTP status code alone. Most APIs follow the standard (a 429 is a rate limit, a 503 is worth retrying, a 404 is not), but some answer `200 OK` and put the real outcome — an error or a rate limit — in the body.
 
-A connector for such an API is a thin shell that uses this connector's code as a library. The shell has its own Nexus service and operation, its activities call `SendRequest` as a function inside their own activity (not a cross-service Nexus hop), and after each response they inspect the body:
+A connector for such an API is a thin shell that uses the HTTP connector's code as a library. The shell has its own Nexus service and operation, its activities call `SendRequest` as a function inside their own activity (not a cross-service Nexus hop), and after each response they inspect the body:
 
 ```go
 resp, err := a.SendRequest(ctx, req)
@@ -77,4 +77,4 @@ if err == nil && bodySaysRateLimited(resp) {
 
 Everything a shell needs is exported: `New` (creates the activities and rate-limit cache), `Validate`, `CheckDomain`, `ScheduleToClose`, and `ActivityOptions`. The [nexus-connector-openapi](https://github.com/Evanthx/nexus-connector-openapi) project is a generated shell of this kind: it generates a typed Nexus service from an OpenAPI spec, with one activity per API operation, each calling `SendRequest` in-process.
 
-This approach works only for in-process callers. A workflow calling this connector's Nexus operation from another namespace cannot reach the connector's internal rate-limit cache.
+This approach works only for in-process callers. A workflow calling this Connector's Nexus operation from another namespace cannot reach the Connector's internal rate-limit cache.

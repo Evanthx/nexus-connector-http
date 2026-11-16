@@ -7,5 +7,5 @@ headers, query parameters, auth, body) and returns the response (status, headers
 Failures are `ApplicationError`s whose type is `InvalidRequest`, `ClientError`, `Transient` or
 `RateLimited`. `Transient` and `RateLimited` failures are retried until 10 seconds before your
 Nexus operation times out, then the operation fails with the last error. With no timeout, or a
-longer one, retries stop after the connector's maximum (25 hours by default). A timeout too short
+longer one, retries stop after the Connector's maximum (25 hours by default). A timeout too short
 for one attempt plus those 10 seconds is rejected with `InvalidRequest`.

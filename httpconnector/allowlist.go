@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-// AllowedDomainsEnvVar names the environment variable on the connector worker that limits which
+// AllowedDomainsEnvVar names the environment variable on the Connector that limits which
 // hosts requests can go to: a comma-separated list of domains, such as
 // "temporal.io, api.stripe.com". A domain allows itself and its subdomains. It is required: unset
-// or empty, the worker doesn't start. Set to DisableAllowlist, any host is allowed. When redirects
+// or empty, the Connector doesn't start. Set to DisableAllowlist, any host is allowed. When redirects
 // are followed (AllowRedirectsEnvVar), every redirect is checked too: one to a host that isn't
 // allowed isn't followed.
 const AllowedDomainsEnvVar = "HTTP_CONNECTOR_ALLOWED_DOMAINS"
 
 // DisableAllowlist is the value of AllowedDomainsEnvVar that turns the allowlist off, so the
-// connector calls any host. It must be the whole value; case and surrounding spaces are ignored.
+// Connector calls any host. It must be the whole value; case and surrounding spaces are ignored.
 const DisableAllowlist = "DISABLE ALLOWLIST"
 
 // parseDomains reads v, the value of the variable name, as a list of domains: DisableAllowlist,
@@ -101,7 +101,7 @@ func (a *HTTPActivities) CheckDomain(rawURL string) error {
 	if a.allowedHost(host) {
 		return nil
 	}
-	return fmt.Errorf("domain %q is not on the connector's list of allowed domains (%s)", host, AllowedDomainsEnvVar)
+	return fmt.Errorf("domain %q is not on the Connector's list of allowed domains (%s)", host, AllowedDomainsEnvVar)
 }
 
 // allowedHost reports whether host, from normalHost, is one of the allowed domains or a subdomain

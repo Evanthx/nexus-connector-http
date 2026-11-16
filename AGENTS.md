@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instructions for AI agents that set up, run, call, and change this connector. The `docs/`
+Instructions for AI agents that set up, run, call, and change this Connector. The `docs/`
 directory has the full explanations for humans; this file has what you need to act, and the
 mistakes to avoid.
 
@@ -9,7 +9,7 @@ mistakes to avoid.
 ```
 http.nexusrpc.yaml          the contract (source of truth for the wire format)
 endpoint-description.md     the endpoint description shown in the Temporal UI
-cmd/worker/                 the connector's process
+cmd/worker/                 the Connector's process
 httpconnector/              all connector logic; settings.go lists every environment variable
 settings/                   declaring and reading environment variables (the only code that reads them)
 configui/                   the setup page (make configui); gendocs/ writes docs/setup.md's tables
@@ -27,7 +27,8 @@ docs/
 ## What this is
 
 A Temporal connector that makes **outbound HTTP requests** for workflows in other namespaces (Go,
-module `github.com/temporalio/nexus-connector-http`). It serves one Nexus operation,
+module `github.com/temporalio/nexus-connector-http`). It runs as one program, the Nexus
+Connector, called the Connector from here on. It serves one Nexus operation,
 `HTTPService.sendRequest`, behind a Nexus endpoint. A caller sends a `SendRequestInput` (URL,
 method, headers, query parameters, body, credentials) and gets a `SendRequestOutput` (status,
 headers, body) back. It is write-only: it makes the request it is given and returns the response,
@@ -42,23 +43,23 @@ all retrying.
 
 - Go 1.26 or later, and Go SDK v1.50 or later (`temporalnexus.StartActivity`).
 - Temporal Server 1.32 or later (Temporal CLI 1.9.1 or later for a local dev server), or Temporal
-  Cloud. The connector's namespace needs **standalone activities with completion callbacks**:
+  Cloud. The Connector's namespace needs **standalone activities with completion callbacks**:
   - Dev server: `--dynamic-config-value activity.enableCallbacks=true`.
-  - Without it, every call fails with `handler error (BAD_REQUEST)` and the worker logs
+  - Without it, every call fails with `handler error (BAD_REQUEST)` and the Connector logs
     `completion callbacks are not enabled for this namespace`.
   - On Temporal Cloud, ask the user to confirm with Temporal that it is enabled for the namespace.
     Don't assume.
-- Network access from the connector to the URLs callers will request.
+- Network access from the Connector to the URLs callers will request.
 
-The worker, the test caller's worker, and the starter connect to Temporal like the `temporal` CLI,
+The Connector, the test caller's worker, and the starter connect to Temporal like the `temporal` CLI,
 with `envconfig`: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`, `TEMPORAL_API_KEY`, `TEMPORAL_TLS_*`,
 `TEMPORAL_PROFILE`, and the CLI's profile file. With none, `localhost:7233`. The namespace defaults
-to `connectors` for the connector and `http-testcaller` for the test caller; give each process
+to `connectors` for the Connector and `http-testcaller` for the test caller; give each process
 its own. Any namespace works, including `default`. All Nexus connectors share `connectors` by
 default and are kept apart by task queue; this one's is the constant `nexus-connector-http`, so
 copies of it in one namespace share the same work.
 
-## Run the connector
+## Run the Connector
 
 1. **Start Temporal** (local):
 
@@ -69,7 +70,7 @@ copies of it in one namespace share the same work.
    ```
 
    Add `--http-port 7243` if anything will call the endpoint over plain HTTP.
-2. **Create the Nexus endpoint** targeting the connector's namespace and task queue
+2. **Create the Nexus endpoint** targeting the Connector's namespace and task queue
    `nexus-connector-http` (`httpconnector.TaskQueue`):
 
    ```bash
@@ -80,7 +81,7 @@ copies of it in one namespace share the same work.
 
    The dev server keeps endpoints in memory: create it again after every restart. On Temporal
    Cloud, create it in the Cloud UI or with `tcld`, and allow the callers' namespaces to call it.
-3. **Export secrets, then run the worker** in the same terminal:
+3. **Export secrets, then run the Connector** in the same terminal:
 
    ```bash
    export HTTP_CONNECTOR_ALLOWED_DOMAINS="httpbin.org"   # required; or "DISABLE ALLOWLIST"
@@ -92,20 +93,20 @@ copies of it in one namespace share the same work.
    To work out and test the variables with the user, run `make configui` and have them open
    http://localhost:8090 (localhost only). Its Test checks every variable as startup does, connects
    to Temporal, checks the namespace and that an endpoint targets it and `nexus-connector-http`, and
-   can send one GET through the connector's request code. It changes no environment; it lists the
+   can send one GET through the Connector's request code. It changes no environment; it lists the
    `export` lines. The full list of variables is in docs/setup.md, generated from
    `httpconnector/settings.go`.
 
    | Variable | Value |
    |---|---|
    | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as any header's whole value. |
-   | `HTTP_CONNECTOR_SECRET_*_DOMAINS` | **Required for each secret.** Where it may be sent: a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS` (domains with their subdomains, exact IPv4 addresses, or `DISABLE ALLOWLIST` for any allowed host). A secret without one, or one whose secret is unset or empty, makes the worker exit at startup. A `_DOMAINS` variable is never a secret. |
-   | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the worker exit at startup. |
-   | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the worker exit at startup. |
-   | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the worker exit at startup. |
-   | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | **Required.** Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. `DISABLE ALLOWLIST` (`DisableAllowlist`, any case) as the whole value allows any host. Unset or empty, or an entry that isn't a bare domain of at least two labels (scheme, port, path, `*`, empty, a single label such as `com` or `localhost`, or a partial IPv4 address such as `10.0`), makes the worker exit at startup. An IPv4 entry matches only that address. |
+   | `HTTP_CONNECTOR_SECRET_*_DOMAINS` | **Required for each secret.** Where it may be sent: a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS` (domains with their subdomains, exact IPv4 addresses, or `DISABLE ALLOWLIST` for any allowed host). A secret without one, or one whose secret is unset or empty, makes the Connector exit at startup. A `_DOMAINS` variable is never a secret. |
+   | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the Connector exit at startup. |
+   | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the Connector exit at startup. |
+   | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the Connector exit at startup. |
+   | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | **Required.** Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. `DISABLE ALLOWLIST` (`DisableAllowlist`, any case) as the whole value allows any host. Unset or empty, or an entry that isn't a bare domain of at least two labels (scheme, port, path, `*`, empty, a single label such as `com` or `localhost`, or a partial IPv4 address such as `10.0`), makes the Connector exit at startup. An IPv4 entry matches only that address. |
    | `TEMPORAL_*` | As above. Every one `envconfig` reads is in `settings.Temporal`'s section. |
-   | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Optional, read by Go itself (and lower case when upper is unset or empty), not the connector's code. Requests use them; the gRPC connection to Temporal uses `HTTPS_PROXY` and `NO_PROXY`. |
+   | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Optional, read by Go itself (and lower case when upper is unset or empty), not the Connector's code. Requests use them; the gRPC connection to Temporal uses `HTTPS_PROXY` and `NO_PROXY`. |
 
 ## Call it
 
@@ -118,7 +119,7 @@ c := workflow.NewNexusClient("http-endpoint", httpapi.HTTPService.ServiceName)
 req := httpapi.SendRequestInput{URL: "https://api.example.com/items"}
 var resp httpapi.SendRequestOutput
 err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
-    ScheduleToCloseTimeout: time.Hour, // the connector retries until 10s before this
+    ScheduleToCloseTimeout: time.Hour, // the Connector retries until 10s before this
 }).Get(ctx, &resp)
 ```
 
@@ -137,7 +138,7 @@ The input as JSON:
 | `method` | `GET` | `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, upper case. |
 | `headers`, `queryParams` | none | String maps. Query parameters are added to any in the URL. |
 | `body` | none | A string; text only, so a JSON body is escaped inside it. |
-| `apiKeyEnvVar` | none | Name of a variable on the connector, starting `HTTP_CONNECTOR_SECRET_`. |
+| `apiKeyEnvVar` | none | Name of a variable on the Connector, starting `HTTP_CONNECTOR_SECRET_`. |
 | `apiKeyParam` | none | Query parameter for the key. Unset: the key goes in `Authorization`, as `Bearer <key>`, or as the basic auth password with `username`. |
 | `username` | none | Basic auth user. Needs `apiKeyEnvVar`; can't be used with `apiKeyParam`. |
 | `timeoutSeconds` | 30 | One attempt, 1–60. |
@@ -151,8 +152,8 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
 
 ## Rules that break things when ignored
 
-- **The caller's Nexus timeout sets how long the connector retries**: until `callbackMargin` (10s)
-  before it, then the caller gets the connector's last error, not a timeout. The connector reads it
+- **The caller's Nexus timeout sets how long the Connector retries**: until `callbackMargin` (10s)
+  before it, then the caller gets the Connector's last error, not a timeout. The Connector reads it
   from the `operation-timeout` header, which the caller's server sets to the smaller of the
   operation's remaining `ScheduleToCloseTimeout` and its `StartToCloseTimeout`. No header, or more
   time than `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, means the maximum. A timeout under
@@ -162,17 +163,17 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   `apiKeyEnvVar`, or as any header's whole value, such as `Authorization` or `X-Api-Key` (the
   variable then holds the whole header value, scheme included, e.g. `Bearer ...` or
   `Basic <base64>` for Stripe-style auth). Any other header value is sent and stored in workflow
-  history as is. Export the variable in the worker's environment, not the caller's, with its
+  history as is. Export the variable in the Connector's environment, not the caller's, with its
   `_DOMAINS` list: a request that would send it to a host not on that list fails with
   `InvalidRequest`, unsent, so one API's key can't be sent to another allowed host.
 - **A caller with no Nexus timeout retries a failing endpoint for 25 hours** (the default
   maximum). Give the operation a short timeout when trying things out.
-- **The rate-limit cache is per worker and in memory.** A 429 holds back every request with the
+- **The rate-limit cache is per Connector process and in memory.** A 429 holds back every request with the
   same key (URL plus username, else key variable name, else `Authorization` variable name, else
-  `anon`) for the window, without sending them. Restarting the worker clears it; several workers
-  each probe on their own.
-- **`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required**; the worker won't start without it. With
-  `DISABLE ALLOWLIST`, the connector calls any URL, including ones on its own network. Tell the user
+  `anon`) for the window, without sending them. Restarting the Connector clears it; several Connector
+  processes each probe on their own.
+- **`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required**; the Connector won't start without it. With
+  `DISABLE ALLOWLIST`, the Connector calls any URL, including ones on its own network. Tell the user
   if that matters where it runs. The list checks the request's URL and
   every followed redirect: a redirect to a host not on it isn't followed, and fails as a `ClientError`
   naming the host. It checks names, not the addresses they resolve to.
@@ -180,7 +181,7 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
 
 ## Check it is working
 
-- The worker logs its setup, then `Starting worker on namespace "connectors", task queue
+- The Connector logs its setup, then `Starting worker on namespace "connectors", task queue
   "nexus-connector-http"`. The setup is the allowlist (`Only calls to these domains are allowed
   (HTTP_CONNECTOR_ALLOWED_DOMAINS): ...`, or `Calls to any domain are allowed: the allowlist is
   disabled ...`), then one line per secret
@@ -197,7 +198,7 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   ```
 
   Flags: `-url`, `-method`, `-body`, `-timeout` (the Nexus operation's timeout; none by default).
-- A request being retried is a standalone activity in the connector's namespace, with ID
+- A request being retried is a standalone activity in the Connector's namespace, with ID
   `http-<Nexus request ID>`:
 
   ```bash
@@ -218,7 +219,7 @@ callers find it with `errors.As`. For an HTTP response, `Details` holds the `Sen
 | Type | Cause | Retried |
 |---|---|---|
 | `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, a caller timeout under `timeoutSeconds` + 10s, a host not in the allowed domains, a secret whose `_DOMAINS` list doesn't hold the host, invalid header name or value, two header names differing only in case, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
-| `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a redirect to a host not in the allowed domains (message `redirected to "<host>", which is not on the connector's list of allowed domains`, details the 3xx with its `Location`); a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
+| `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a redirect to a host not in the allowed domains (message `redirected to "<host>", which is not on the Connector's list of allowed domains`, details the 3xx with its `Location`); a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
 | `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 1s×2 up to 30s |
 | `RateLimited` | 429, or the key is in the rate-limit cache. | After the window |
 
@@ -266,7 +267,7 @@ go test -short ./...                                           # skip the end-to
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
   `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
-  the connector's API for code that registers or calls it differently (such as
+  the Connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
 - `Register` makes one `HTTPActivities` for both the service and the activity registration, so one
   rate-limit cache is shared. Keep that.
@@ -288,7 +289,7 @@ request through the code.
     rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
     whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
     error type); redaction.
-  - `settings.go`: `Settings`, every variable the connector reads, in sections, with the parse
+  - `settings.go`: `Settings`, every variable the Connector reads, in sections, with the parse
     functions that check them (`parseAllowedDomains`, `parseAllowRedirects`, `minutes`) and
     `secretsFamily` (`HTTP_CONNECTOR_SECRET_<NAME>` with `<NAME>_DOMAINS`, checked by
     `readSecretDomains`). `NewWithEnv(env)` loads them all with `Settings.Load`, which reports
@@ -349,11 +350,11 @@ request through the code.
     deletes `Referer` (Go sets it to the previous URL, query key included); and, once `leftSite`
     (any hop not the original host or a subdomain of it, sticky as in Go), deletes every header from
     `secretHeaderVars`. Go itself drops `Authorization` and `Cookie` there. Keep the two conditions
-    in step: ours must strip whenever Go's does. Any new way the connector puts a secret into a
+    in step: ours must strip whenever Go's does. Any new way the Connector puts a secret into a
     header must be added to `secretHeaderVars` so a redirect drops it.
 - Non-2xx errors carry the `SendRequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.
-- `cmd/worker` — the connector's process: `ClientOptions(settings.OS())`, `worker.New` on
+- `cmd/worker` — the Connector's process: `ClientOptions(settings.OS())`, `worker.New` on
   `TaskQueue`, `Register`.
 - `settings/` — the same in every Go connector repo. `Program` (sections of `Variable`s and
   `Family`s, plus cross-variable `Rules`), `Load(env)` (every problem at once), `Define`/`Typed`
@@ -361,7 +362,7 @@ request through the code.
   the docs tables. `Temporal{...}.Section()` lists every variable `envconfig` reads. A `Variable`
   with `External` is read by a library from the process's environment (`ExternalValue`,
   `MaskURLPassword`).
-- `configui/` — the setup page, never imported by the connector. `main.go`, `temporal.go` and
+- `configui/` — the setup page, never imported by the Connector. `main.go`, `temporal.go` and
   `index.html` are generic (the page renders only from `/api/settings`); `connector.go` lists this
   repo's programs, test fields and `checkConnector`, which runs `SendRequest` once in the SDK's test
   activity environment. A test runs against `settings.Map` built from the process's environment with
@@ -393,7 +394,7 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
 - `testcaller/e2e_test.go` — starts a dev server with the `temporal` CLI (skipped if it isn't on
   the PATH, or with `-short`), creates both namespaces and the endpoint, runs both workers
   in-process, and runs `CallerWorkflow` against `httptest` servers: success, a retried 503,
-  retries stopping before a 15s caller timeout with the connector's error, a caller timeout too
+  retries stopping before a 15s caller timeout with the Connector's error, a caller timeout too
   short for one attempt rejected at start, a 404 `ClientError` with its response, an
   `InvalidRequest`, a domain not allowed, and a secret sent outside its `_DOMAINS` list, all
   rejected at start, and a secret sent within its list. It sets the allowed domains to

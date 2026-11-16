@@ -813,7 +813,7 @@ func TestSendRequest_ResponseSizeLimit(t *testing.T) {
 		ae := appErr(t, err)
 		require.Equal(t, ErrorTypeClientError, ae.Type(), "size %d", tc.size)
 		require.True(t, ae.NonRetryable())
-		require.Equal(t, fmt.Sprintf("%s returned status 200, but its body is over the connector's 2 MiB limit, so the response isn't returned", srv.URL), ae.Message())
+		require.Equal(t, fmt.Sprintf("%s returned status 200, but its body is over the Connector's 2 MiB limit, so the response isn't returned", srv.URL), ae.Message())
 	}
 }
 
@@ -862,7 +862,7 @@ func TestSendRequest_BasicAuth(t *testing.T) {
 }
 
 // A variable without the prefix is refused, even when it is set, and the request isn't sent: a
-// caller must not be able to send any of the worker's environment to a URL it chooses.
+// caller must not be able to send any of the Connector's environment to a URL it chooses.
 func TestSendRequest_APIKeyEnvVarNeedsPrefix(t *testing.T) {
 	t.Setenv("TEMPORAL_API_KEY_FOR_TEST", "s3cr3t")
 	srv, hits := countingServer(t, 200, "")

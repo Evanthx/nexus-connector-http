@@ -1,6 +1,6 @@
 package main
 
-// This file is what the setup page knows about this repo's connector: its programs and the checks
+// This file is what the setup page knows about this repo's program, the Connector, and the checks
 // particular to it. The variables themselves come from httpconnector.Settings. The rest of
 // configui is the same in every Go connector repo.
 
@@ -31,7 +31,7 @@ var programs = []program{{
 	TestFields: []testField{
 		{
 			ID: "url", Kind: "text", Label: "Test request URL", Placeholder: "https://httpbin.org/get",
-			Help: "Optional. The Test sends one GET to this URL through the connector's own request code, with the " +
+			Help: "Optional. The Test sends one GET to this URL through the Connector's own request code, with the " +
 				"settings above, and shows the status or the error. The host must be allowed.",
 		},
 		{
@@ -43,9 +43,9 @@ var programs = []program{{
 	Check: checkConnector,
 }}
 
-// checkConnector builds the connector from env as the worker does, then reports what it allows,
+// checkConnector builds the Connector from env as the Connector does, then reports what it allows,
 // any secret domain the allowlist doesn't allow, and, if fields has a url, the result of one GET
-// sent through the connector's SendRequest activity.
+// sent through the Connector's SendRequest activity.
 func checkConnector(_ context.Context, env settings.Env, fields map[string]string) check {
 	c := check{Title: "Connector"}
 	a, err := httpconnector.NewWithEnv(env)
@@ -94,7 +94,7 @@ func sendTest(a *httpconnector.HTTPActivities, req httpapi.SendRequestInput) (ht
 	return out, err
 }
 
-// describeError is the connector's error type and message, with the response's status if it has
+// describeError is the Connector's error type and message, with the response's status if it has
 // one.
 func describeError(err error) string {
 	var ae *temporal.ApplicationError

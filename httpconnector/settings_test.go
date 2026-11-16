@@ -48,8 +48,8 @@ func TestCheckSecretsAllowed(t *testing.T) {
 		SecretEnvPrefix + "OTHER":  {"example.com"},
 	}
 	require.EqualError(t, a.CheckSecretsAllowed(),
-		`HTTP_CONNECTOR_SECRET_LAN_DOMAINS lists "10.0.0.6", which isn't within HTTP_CONNECTOR_ALLOWED_DOMAINS, so the connector won't call it`+"\n"+
-			`HTTP_CONNECTOR_SECRET_OTHER_DOMAINS lists "example.com", which isn't within HTTP_CONNECTOR_ALLOWED_DOMAINS, so the connector won't call it`)
+		`HTTP_CONNECTOR_SECRET_LAN_DOMAINS lists "10.0.0.6", which isn't within HTTP_CONNECTOR_ALLOWED_DOMAINS, so the Connector won't call it`+"\n"+
+			`HTTP_CONNECTOR_SECRET_OTHER_DOMAINS lists "example.com", which isn't within HTTP_CONNECTOR_ALLOWED_DOMAINS, so the Connector won't call it`)
 
 	a.domains = nil
 	require.NoError(t, a.CheckSecretsAllowed(), "the allowlist is disabled")
@@ -67,7 +67,7 @@ func TestClientOptions(t *testing.T) {
 	require.Equal(t, "mine", opts.Namespace)
 }
 
-// Every variable the connector names has an entry in Settings, with help.
+// Every variable the Connector names has an entry in Settings, with help.
 func TestSettings_ListsEveryVariable(t *testing.T) {
 	listed := map[string]string{}
 	for _, v := range Settings.Variables() {
@@ -78,7 +78,7 @@ func TestSettings_ListsEveryVariable(t *testing.T) {
 		require.NotEmpty(t, listed[name], name)
 	}
 	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
-		require.NotNil(t, Settings.External(name), "%s is read by Go, not the connector", name)
+		require.NotNil(t, Settings.External(name), "%s is read by Go, not the Connector", name)
 	}
 	require.True(t, Settings.IsSecret(SecretEnvPrefix+"STRIPE"))
 	require.False(t, Settings.IsSecret(SecretEnvPrefix+"STRIPE"+SecretDomainsSuffix))

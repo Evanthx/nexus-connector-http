@@ -28,9 +28,9 @@ const (
 	stripeDomains = stripe + httpconnector.SecretDomainsSuffix
 )
 
-// connectorClientMakers are the client constructors of the library this repo's connector calls
+// connectorClientMakers are the client constructors of the library the Connector calls
 // its service with, as "import path.Name", which configui must not call itself (see
-// TestNoOwnClient). None here: the connector uses net/http, which clientMakers covers. Other
+// TestNoOwnClient). None here: the Connector uses net/http, which clientMakers covers. Other
 // repos list theirs, such as "github.com/stripe/stripe-go/v82.NewClient",
 // "github.com/slack-go/slack.New" or "github.com/twmb/franz-go/pkg/kgo.NewClient".
 var connectorClientMakers = []string{}
@@ -190,7 +190,7 @@ func TestSettings_JSON(t *testing.T) {
 	}
 }
 
-// Every variable envconfig reads and the connector uses is in the Temporal section, and every
+// Every variable envconfig reads and the Connector uses is in the Temporal section, and every
 // setting of a profile maps to one of them.
 func TestTemporalSection_ListsWhatEnvconfigReads(t *testing.T) {
 	names := map[string]bool{}
@@ -331,8 +331,8 @@ func TestLocalOnly(t *testing.T) {
 func TestTest_RefusesABadRequest(t *testing.T) {
 	h := newServer(baseEnv(t, nil), programs)
 	for body, want := range map[string]string{
-		`{"program":`:         "bad request",
-		`{"program":"relay"}`: `unknown program "relay"`,
+		`{"program":`:          "bad request",
+		`{"program":"reader"}`: `unknown program "reader"`,
 		`{"program":"connector","values":{"A=B":"x"}}`:     `"A=B" isn't a variable name`,
 		`{"program":"connector","values":{"1ABC":"x"}}`:    `"1ABC" isn't a variable name`,
 		`{"program":"connector","values":{"":"x"}}`:        `"" isn't a variable name`,
@@ -345,7 +345,7 @@ func TestTest_RefusesABadRequest(t *testing.T) {
 	}
 }
 
-// The Settings check reports exactly what the worker would at startup, every problem at once.
+// The Settings check reports exactly what the Connector would at startup, every problem at once.
 func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
 	setTemporalTimeout(t, time.Second)
 	values := map[string]string{
@@ -418,7 +418,7 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 	require.NotContains(t, raw, "s3cret")
 }
 
-// A request the connector refuses shows its error, and a secret's domain the allowlist doesn't
+// A request the Connector refuses shows its error, and a secret's domain the allowlist doesn't
 // allow is a problem.
 func TestTest_ConnectorProblems(t *testing.T) {
 	setTemporalTimeout(t, time.Second)
@@ -434,8 +434,8 @@ func TestTest_ConnectorProblems(t *testing.T) {
 	})
 	require.False(t, resp.OK)
 	require.Equal(t, []string{
-		stripeDomains + ` lists "api.stripe.com", which isn't within ` + httpconnector.AllowedDomainsEnvVar + ", so the connector won't call it",
-		`GET https://not-allowed.test/: InvalidRequest: domain "not-allowed.test" is not on the connector's list of allowed domains (` +
+		stripeDomains + ` lists "api.stripe.com", which isn't within ` + httpconnector.AllowedDomainsEnvVar + ", so the Connector won't call it",
+		`GET https://not-allowed.test/: InvalidRequest: domain "not-allowed.test" is not on the Connector's list of allowed domains (` +
 			httpconnector.AllowedDomainsEnvVar + ")",
 	}, checkTitled(t, resp, "Connector").Problems)
 }

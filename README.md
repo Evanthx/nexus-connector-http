@@ -5,7 +5,7 @@
 
 ## What are Nexus Connectors?
 
-A Nexus Connector lets a Temporal workflow work with a system outside Temporal, such as a message
+A Nexus connector lets a Temporal workflow work with a system outside Temporal, such as a message
 broker, a payment provider, a chat platform, or an HTTP API, without writing that integration
 itself. Each connector runs as a Temporal worker and offers its operations through a
 [Nexus](https://docs.temporal.io/nexus) endpoint. Some operations map directly to one call on the
@@ -24,13 +24,14 @@ for another, following the principle of least privilege.
 
 ## What is the Outbound HTTP Connector?
 
-**Durable HTTP calls, ready to use.** The HTTP connector is a Temporal worker that makes HTTP
-requests for your workflows. A workflow describes a request (URL, method, headers, body, and which
-API key to use) and calls the connector's one operation, `HTTPService.sendRequest`. The connector
+**Durable HTTP calls, ready to use.** The HTTP connector makes HTTP requests for your workflows.
+It runs as one program, the Nexus Connector, called the Connector from here on: a Temporal worker,
+in the `connectors` namespace by default. A workflow describes a request (URL, method, headers, body, and which
+API key to use) and calls the Connector's one operation, `HTTPService.sendRequest`. The Connector
 sends the request, retries it when retrying can help, and returns the response or the final error.
 
 ```
- your namespace                         connector namespace
+ your namespace                         namespace: connectors
 ┌──────────────────────┐    Nexus     ┌──────────────────────────────────────┐
 │ your workflow        │────────────▶ │ HTTPService.sendRequest              │
 │  sendRequest(req)    │              │   retries, rate-limit backoff,       │
@@ -45,15 +46,15 @@ Every workflow that calls an HTTP API needs the same handful of things done righ
 tends to write them again:
 
 - **Deciding what to retry.** A 503 or a network error is worth retrying; a 404 is not. The
-  connector sorts every status into a [typed error](docs/errors.md) and retries only what can
+  Connector sorts every status into a [typed error](docs/errors.md) and retries only what can
   succeed.
-- **Backing off from rate limits.** After a 429, the connector holds back every request to that
+- **Backing off from rate limits.** After a 429, the Connector holds back every request to that
   endpoint and key for a window, instead of each caller hammering it.
 - **Timeouts.** Each attempt has a timeout, and retries stop just before the caller's own deadline,
   so the caller gets the real last error rather than a bare timeout.
 - **Keeping API keys out of workflow history.** Requests name an environment variable on the
-  connector; the key is read at send time and redacted from responses and error messages.
-- **Limiting where requests can go.** An optional allowlist restricts the hosts the connector will
+  Connector; the key is read at send time and redacted from responses and error messages.
+- **Limiting where requests can go.** An optional allowlist restricts the hosts the Connector will
   call, redirects included.
 
 ## When to use it
@@ -74,25 +75,25 @@ that does not follow the expected standards (for example, one that returns a 200
 ## FAQ
 
 **Why do I need this? I can write an Activity that makes HTTP calls myself.**
-You can, and for a single call that is often enough. The connector is that activity, written
+You can, and for a single call that is often enough. The Connector is that activity, written
 once with the details that are easy to get wrong: which statuses to retry, honoring 429s across
-every caller on the worker, stopping retries before the caller's deadline, and keeping keys out of
+every caller of the Connector, stopping retries before the caller's deadline, and keeping keys out of
 history and logs. Running it behind a Nexus endpoint adds what an activity in your own worker
-can't: other teams, namespaces, and languages call the same connector, the API keys live only on
-the connector, and access is granted per endpoint. The trade-off is a Nexus call in front of each
+can't: other teams, namespaces, and languages call the same Connector, the API keys live only on
+the Connector, and access is granted per endpoint. The trade-off is a Nexus call in front of each
 request.
 
 **How do I set the `Authorization` header on outgoing requests?**
-Export the key on the connector worker in a variable named `HTTP_CONNECTOR_SECRET_<NAME>`, with
+Export the key on the Connector in a variable named `HTTP_CONNECTOR_SECRET_<NAME>`, with
 `HTTP_CONNECTOR_SECRET_<NAME>_DOMAINS` listing the hosts it may be sent to, and name that variable
-in the request's `apiKeyEnvVar`. The connector sends it as a `Bearer` token, or as
+in the request's `apiKeyEnvVar`. The Connector sends it as a `Bearer` token, or as
 the basic auth password when the request has a `username`. For any other scheme, put the whole
 header value (such as `Basic <base64>`) in the variable and set the request's `Authorization`
 header to the variable's name. The key never enters the request or workflow history. See
 [API keys and secrets](docs/usage.md#api-keys-and-secrets).
 
-**Can I generate strongly typed clients for this connector?**
-Yes. The connector's operations are defined in a contract file, `http.nexusrpc.yaml`, and a tool
+**Can I generate strongly typed clients for this Connector?**
+Yes. The Connector's operations are defined in a contract file, `http.nexusrpc.yaml`, and a tool
 called nexgen turns it into typed request and response classes in Go, Python, TypeScript, and
 Java. See [Typed clients](docs/clients.md).
 
@@ -100,18 +101,18 @@ Java. See [Typed clients](docs/clients.md).
 5xx responses and network errors are retried with backoff; 429s wait out a rate-limit window; both
 stop just before your operation's timeout. See [Errors, timeouts, and rate limiting](docs/errors.md).
 
-**Can I stop the connector from calling arbitrary hosts?**
+**Can I stop the Connector from calling arbitrary hosts?**
 Yes, and by default it must: `HTTP_CONNECTOR_ALLOWED_DOMAINS` is required and lists the domains it
 may call. Set it to `DISABLE ALLOWLIST` to allow any host. See [Allowed domains](docs/usage.md#allowed-domains).
 
 ## Documentation
 
 - [Setup](docs/setup.md): prerequisites, starting Temporal, creating the Nexus endpoint, running the
-  worker, environment variables, and connecting to Temporal Cloud. To work out and test the
+  Connector, environment variables, and connecting to Temporal Cloud. To work out and test the
   environment variables in a form, run `make configui` and open <http://localhost:8090>: its
-  **Test** checks every variable as the worker does at startup, the connection to Temporal and the
+  **Test** checks every variable as the Connector does at startup, the connection to Temporal and the
   Nexus endpoint, and can send a test request (see [Setup page](docs/setup.md#setup-page)).
-- [Usage](docs/usage.md): calling the connector from a workflow, every request option, API keys and
+- [Usage](docs/usage.md): calling the Connector from a workflow, every request option, API keys and
   secrets, and allowed domains.
 - [Typed clients](docs/clients.md): the contract, and generating clients for Go, Python, TypeScript,
   and Java.
@@ -122,7 +123,7 @@ may call. Set it to `DISABLE ALLOWLIST` to allow any host. See [Allowed domains]
   changing the contract, and APIs that don't follow the standard.
 - [Troubleshooting](docs/troubleshooting.md): common problems, their causes, and fixes.
 
-AI agents: see [AGENTS.md](AGENTS.md) for how to set up, run, call, and change this connector.
+AI agents: see [AGENTS.md](AGENTS.md) for how to set up, run, call, and change this Connector.
 
 ## License
 
