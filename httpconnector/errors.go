@@ -1,10 +1,8 @@
 package httpconnector
 
 import (
-	"context"
 	"time"
 
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -33,35 +31,16 @@ func InvalidRequestError(err error) error {
 		temporal.ApplicationErrorOptions{NonRetryable: true})
 }
 
-// Retry delays. Every retryable error sets its next attempt's delay itself, with NextRetryDelay:
-//
-//   - RateLimited waits the rate-limit window: all of it after a 429, or what is left of it when
-//     an earlier 429 for the same key is still cached. Earlier Transient errors don't change this.
-//   - Transient waits backoffInitial, doubling for each Transient error in a row before it, up to
-//     backoffMax.
-//
-// Two counts are involved, and only one of them resets:
-//
-//   - The server's attempt number goes up by one every attempt, RateLimited or not, and never
-//     resets. The retry policy's own backoff is computed from it, so after rate-limited attempts it
-//     would make a Transient error wait as if they had been Transient too. That backoff now applies
-//     only when an attempt hits its StartToCloseTimeout, since the activity can't set a delay then.
-//     The policy has no MaximumAttempts, so the attempt number never ends the retries; only the
-//     ScheduleToCloseTimeout (see ScheduleToClose) does.
-//   - The Transient count is how many Transient errors in a row there have been. Each attempt
-//     records it as heartbeat details, which the server hands to the next attempt. A RateLimited
-//     error resets it to 0, so the first Transient error after a rate limit waits backoffInitial
-//     again. The first heartbeat of an attempt is sent at once, not batched, so it reaches the
-//     server before the attempt fails. If that call fails, the next attempt sees an earlier
-//     attempt's count, or none, and backs off from that; the retries still stop at the
-//     ScheduleToCloseTimeout.
-//
-// For example, 503, 503, 429, 503 waits 1s, 2s, the window, then 1s.
+// Retry delays. Transient errors leave the delay to the activity's retry policy (see
+// ActivityOptions): 5s, then three times longer each attempt, at most 5m apart. RateLimited errors
+// set their own with NextRetryDelay: the rest of the rate-limit window, or a 429's shorter
+// Retry-After (see retryAfter). The policy counts every attempt, rate-limited ones too, so a
+// Transient error after a few rate-limited attempts waits the full 5m: after a 429, that is
+// welcome.
 
 // rateLimitedError is a retryable RateLimited error whose next attempt waits for wait instead of
 // the retry policy's backoff. details, if non-nil, is the response that triggered it.
-func rateLimitedError(ctx context.Context, msg string, wait time.Duration, details any) error {
-	activity.RecordHeartbeat(ctx, 0)
+func rateLimitedError(msg string, wait time.Duration, details any) error {
 	opts := temporal.ApplicationErrorOptions{NextRetryDelay: wait}
 	if details != nil {
 		opts.Details = []any{details}
@@ -69,30 +48,12 @@ func rateLimitedError(ctx context.Context, msg string, wait time.Duration, detai
 	return temporal.NewApplicationErrorWithOptions(msg, ErrorTypeRateLimited, opts)
 }
 
-// transientError is a retryable Transient error. Its next attempt waits backoffInitial, doubling
-// for each Transient failure in a row before it, up to backoffMax. details, if non-nil, is the
-// response that triggered it.
-func transientError(ctx context.Context, msg string, details any) error {
-	var inARow int
-	if activity.HasHeartbeatDetails(ctx) {
-		_ = activity.GetHeartbeatDetails(ctx, &inARow)
-	}
-	activity.RecordHeartbeat(ctx, inARow+1)
-	opts := temporal.ApplicationErrorOptions{NextRetryDelay: transientDelay(inARow)}
+// transientError is a retryable Transient error, retried with the retry policy's backoff.
+// details, if non-nil, is the response that triggered it.
+func transientError(msg string, details any) error {
+	var opts temporal.ApplicationErrorOptions
 	if details != nil {
 		opts.Details = []any{details}
 	}
 	return temporal.NewApplicationErrorWithOptions(msg, ErrorTypeTransient, opts)
-}
-
-// transientDelay is the wait after a Transient failure that follows inARow others.
-func transientDelay(inARow int) time.Duration {
-	delay := backoffInitial
-	for range inARow {
-		delay *= 2
-		if delay >= backoffMax {
-			return backoffMax
-		}
-	}
-	return delay
 }

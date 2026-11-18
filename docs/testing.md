@@ -53,7 +53,7 @@ Starter flags choose a different request:
 go run ./testcaller/starter -url https://httpbin.org/post -method POST -body '{"hello":"world"}'
 ```
 
-You can also start the workflow directly from the CLI. Its inputs are a `SendRequestInput` as JSON and the Nexus operation timeout in nanoseconds (0 for none):
+You can also start the workflow directly from the CLI. Its inputs are a `RequestInput` as JSON and the Nexus operation timeout in nanoseconds (0 for none):
 
 ```bash
 temporal workflow start \
@@ -91,11 +91,11 @@ temporal activity describe --namespace connectors --activity-id <activity ID fro
 make test                                                    # all tests with the race detector
 go test -short ./...                                         # skip the end-to-end test
 make ci                                                      # vet, workflowcheck, lint, and tests (as CI does)
-go test ./httpconnector -run TestSendRequest_429CachesKey -v # single test
+go test ./httpconnector -run TestRequest_429CachesKey -v # single test
 ```
 
 The test suites are:
 
-- **`httpconnector/`** runs `SendRequest` in the SDK's activity test environment against local `httptest` servers. It covers GET and POST responses, status classification, retry delays, timeouts, the rate-limit cache, API keys, redirects, redaction, and input validation.
+- **`httpconnector/`** runs `Request` in the SDK's activity test environment against local `httptest` servers. It covers GET and POST responses, status classification, retry delays, timeouts, the rate-limit cache, API keys, redirects, redaction, and input validation.
 
-- **`testcaller/e2e_test.go`** starts a dev server with the `temporal` CLI, creates both namespaces and the endpoint, runs the Connector and the test caller in-process, and makes requests across the namespaces: a successful request, a retried 503, three 503s backing off 1 s / 2 s / 4 s, retries stopping before the caller's timeout, a 404 `ClientError` with its response in the error details, a caller timeout too short for one attempt rejected at start, an invalid request, and a domain not in the allowed list. It is skipped automatically if `temporal` is not on `PATH`, or when run with `-short`.
+- **`testcaller/e2e_test.go`** starts a dev server with the `temporal` CLI, creates both namespaces and the endpoint, runs the Connector and the test caller in-process, and makes requests across the namespaces: a successful request, a 503 retried after 5 s, retries stopping before the caller's timeout, a 404 `ClientError` with its response in the error details, a caller timeout too short for one attempt rejected at start, an invalid request, and a domain not in the allowed list. It is skipped automatically if `temporal` is not on `PATH`, or when run with `-short`.

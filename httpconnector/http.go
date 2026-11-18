@@ -1,6 +1,6 @@
-// Package httpconnector is the HTTP connector: a Nexus service whose one operation, sendRequest,
-// is backed by a standalone activity, SendRequest, which makes an HTTP request. There is no handler
-// workflow: the operation starts SendRequest and completes when the activity does.
+// Package httpconnector is the HTTP connector: a Nexus service whose one operation, request,
+// is backed by a standalone activity, Request, which makes an HTTP request. There is no handler
+// workflow: the operation starts Request and completes when the activity does.
 package httpconnector
 
 import (
@@ -30,7 +30,7 @@ import (
 // TaskQueue is the Connector's task queue. The Nexus endpoint targets it.
 const TaskQueue = "nexus-connector-http"
 
-// HTTPActivities is the SendRequest activity plus the rate-limit cache it shares across calls.
+// HTTPActivities is the Request activity plus the rate-limit cache it shares across calls.
 // Register one instance per worker, so every call on that worker shares the cache.
 type HTTPActivities struct {
 	lim            *limiter
@@ -74,15 +74,15 @@ func newWithWindow(window time.Duration) *HTTPActivities {
 	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration, secretDomains: map[string][]string{}, env: settings.OS()}
 }
 
-// Register registers the HTTPService Nexus service and the SendRequest activity its operation
+// Register registers the HTTPService Nexus service and the Request activity its operation
 // starts on w. Both use one HTTPActivities, so every call on the worker shares one rate-limit
 // cache. It fails if one of the environment variables New reads is invalid.
 //
-// The sendRequest operation rejects a request that can't be made, whose host isn't an allowed
+// The request operation rejects a request that can't be made, whose host isn't an allowed
 // domain (see CheckDomain), that names a secret its host may not be sent (see CheckSecretDomains),
 // or for which the caller's Nexus operation has too little time left
 // (see ScheduleToClose), with a BadRequest handler error, without starting an activity; otherwise
-// it starts SendRequest as a standalone activity that ends shortly before the operation times out.
+// it starts Request as a standalone activity that ends shortly before the operation times out.
 // The activity ID comes from the Nexus request ID, so a retried start of the same operation
 // reaches the same activity.
 func Register(w worker.Registry) error {
@@ -90,14 +90,14 @@ func Register(w worker.Registry) error {
 	if err != nil {
 		return err
 	}
-	op := temporalnexus.MustNewTemporalOperation(temporalnexus.TemporalOperationOptions[httpapi.SendRequestInput, httpapi.SendRequestOutput]{
-		Name: httpapi.HTTPService.SendRequest.Name(),
+	op := temporalnexus.MustNewTemporalOperation(temporalnexus.TemporalOperationOptions[httpapi.RequestInput, httpapi.RequestOutput]{
+		Name: httpapi.HTTPService.Request.Name(),
 		Start: func(
 			ctx context.Context,
 			nc temporalnexus.NexusClient,
-			req httpapi.SendRequestInput,
+			req httpapi.RequestInput,
 			opts temporalnexus.StartTemporalOperationOptions,
-		) (temporalnexus.TemporalOperationResult[httpapi.SendRequestOutput], error) {
+		) (temporalnexus.TemporalOperationResult[httpapi.RequestOutput], error) {
 			_, err := build(ctx, a.env, req)
 			if err == nil {
 				err = a.CheckDomain(req.URL)
@@ -110,18 +110,18 @@ func Register(w worker.Registry) error {
 				total, err = a.ScheduleToClose(req, opts.Header.Get(nexus.HeaderOperationTimeout))
 			}
 			if err != nil {
-				return temporalnexus.TemporalOperationResult[httpapi.SendRequestOutput]{}, &nexus.HandlerError{
+				return temporalnexus.TemporalOperationResult[httpapi.RequestOutput]{}, &nexus.HandlerError{
 					Type:  nexus.HandlerErrorTypeBadRequest,
 					Cause: InvalidRequestError(err),
 				}
 			}
-			return temporalnexus.StartActivity(ctx, nc, ActivityOptions("http-"+opts.RequestID, total), a.SendRequest, req)
+			return temporalnexus.StartActivity(ctx, nc, ActivityOptions("http-"+opts.RequestID, total), a.Request, req)
 		},
 	})
 	svc := nexus.NewService(httpapi.HTTPService.ServiceName)
 	svc.MustRegister(op)
 	w.RegisterNexusService(svc)
-	w.RegisterActivity(a.SendRequest)
+	w.RegisterActivity(a.Request)
 	return nil
 }
 
@@ -129,23 +129,26 @@ func Register(w worker.Registry) error {
 // can't be longer.
 const attemptTimeout = 60 * time.Second
 
-// Transient errors back off from backoffInitial, doubling up to backoffMax.
+// The retry policy backs off from backoffInitial, three times longer each attempt, up to
+// backoffMax: 5s, 15s, 45s, 2m15s, then every 5m. A failing endpoint is rarely helped by being
+// called more often.
 const (
-	backoffInitial = time.Second
-	backoffMax     = 30 * time.Second
+	backoffInitial     = 5 * time.Second
+	backoffCoefficient = 3.0
+	backoffMax         = 5 * time.Minute
 )
 
-// maxResponseBytes is the largest response body SendRequest reads. A larger one couldn't be
+// maxResponseBytes is the largest response body Request reads. A larger one couldn't be
 // returned within Temporal's payload size limit (2 MB by default) anyway.
 const maxResponseBytes = 2 << 20
 
 // maxRedirects is how many redirects a request follows, as http.Client does by default.
 const maxRedirects = 10
 
-// ActivityOptions are the options for starting SendRequest as a standalone activity with the
-// given ID. Transient errors retry with backoff (1s, doubling, at most 30s apart) and
-// RateLimited errors after the rest of the rate-limit window. SendRequest sets each delay itself
-// (see transientError); the policy's backoff applies only when an attempt times out.
+// ActivityOptions are the options for starting Request as a standalone activity with the
+// given ID. Transient errors and attempt timeouts retry with the policy's backoff; RateLimited
+// errors after the rest of the rate-limit window, or a 429's shorter Retry-After, which they set
+// themselves (see rateLimitedError).
 // scheduleToClose, from ScheduleToClose, bounds the whole call, including every retry and
 // rate-limit wait.
 func ActivityOptions(id string, scheduleToClose time.Duration) client.StartActivityOptions {
@@ -155,7 +158,7 @@ func ActivityOptions(id string, scheduleToClose time.Duration) client.StartActiv
 		ScheduleToCloseTimeout: scheduleToClose,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    backoffInitial,
-			BackoffCoefficient: 2.0,
+			BackoffCoefficient: backoffCoefficient,
 			MaximumInterval:    backoffMax,
 		},
 	}
@@ -181,7 +184,7 @@ func categorizeError(status int) string {
 	return ErrorTypeClientError
 }
 
-// SendRequest makes one HTTP attempt per activity attempt:
+// Request makes one HTTP attempt per activity attempt:
 //
 //   - A request that can't be made, whose host isn't an allowed domain, or that names a secret
 //     its host may not be sent, fails with InvalidRequest, without being sent.
@@ -191,7 +194,7 @@ func categorizeError(status int) string {
 //     returns the response and clears the key. 429 marks the key and fails with RateLimited. Other
 //     statuses fail with ClientError or Transient (see categorizeError), with the response in the
 //     error's details.
-func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
 	logger := activity.GetLogger(ctx)
 
 	httpReq, err := build(ctx, a.env, req)
@@ -202,13 +205,13 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 		err = a.CheckSecretDomains(req)
 	}
 	if err != nil {
-		return httpapi.SendRequestOutput{}, InvalidRequestError(err)
+		return httpapi.RequestOutput{}, InvalidRequestError(err)
 	}
 
 	key := RateLimitKey(req)
 	if wait := a.lim.remaining(key, time.Now()); wait > 0 {
 		logger.Warn("Rate limited by an earlier 429, not sending", "key", key, "retryIn", wait.String())
-		return httpapi.SendRequestOutput{}, rateLimitedError(ctx, fmt.Sprintf("rate limited (cached) for %s", key), wait, nil)
+		return httpapi.RequestOutput{}, rateLimitedError(fmt.Sprintf("rate limited (cached) for %s", key), wait, nil)
 	}
 
 	secrets := secrets(a.env, req)
@@ -227,32 +230,32 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 		if errors.As(err, &notAllowed) {
 			var details []any
 			if resp != nil {
-				out := httpapi.SendRequestOutput{
+				out := httpapi.RequestOutput{
 					StatusCode:     int64(resp.StatusCode),
 					Status:         resp.Status,
-					Headers:        httpapi.SendRequestOutputHeaders{AdditionalProperties: resp.Header},
+					Headers:        httpapi.RequestOutputHeaders{AdditionalProperties: resp.Header},
 					DurationMillis: time.Since(start).Milliseconds(),
 				}
 				redactResponse(&out, secrets)
 				details = append(details, out)
 			}
-			return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(
+			return httpapi.RequestOutput{}, temporal.NewApplicationErrorWithOptions(
 				redact(fmt.Sprintf("%s %v", req.URL, err), secrets), ErrorTypeClientError,
 				temporal.ApplicationErrorOptions{NonRetryable: true, Details: details})
 		}
 		if attemptTimedOut(err, start, req) {
 			msg := fmt.Sprintf("calling %s: no response within timeoutSeconds (%s)", req.URL, timeout(req))
-			return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
+			return httpapi.RequestOutput{}, transientError(msg, nil)
 		}
 		// The rest can still hold a secret the server echoed, such as in a redirect's Location.
 		msg := redact(fmt.Sprintf("calling %s: %v", req.URL, err), secrets)
 		// A certificate that doesn't verify won't on the next attempt either.
 		var certErr *tls.CertificateVerificationError
 		if errors.As(err, &certErr) {
-			return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, ErrorTypeClientError,
+			return httpapi.RequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, ErrorTypeClientError,
 				temporal.ApplicationErrorOptions{NonRetryable: true})
 		}
-		return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
+		return httpapi.RequestOutput{}, transientError(msg, nil)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
@@ -260,38 +263,38 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 	if err != nil {
 		if attemptTimedOut(err, start, req) {
 			msg := fmt.Sprintf("reading the response from %s: not finished within timeoutSeconds (%s)", req.URL, timeout(req))
-			return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
+			return httpapi.RequestOutput{}, transientError(msg, nil)
 		}
 		msg := redact(fmt.Sprintf("reading the response from %s: %v", req.URL, err), secrets)
-		return httpapi.SendRequestOutput{}, transientError(ctx, msg, nil)
+		return httpapi.RequestOutput{}, transientError(msg, nil)
 	}
 	if len(body) > maxResponseBytes {
 		msg := fmt.Sprintf("%s returned status %d, but its body is over the Connector's %d MiB limit, so the response isn't returned",
 			req.URL, resp.StatusCode, maxResponseBytes>>20)
-		return httpapi.SendRequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, ErrorTypeClientError,
+		return httpapi.RequestOutput{}, temporal.NewApplicationErrorWithOptions(msg, ErrorTypeClientError,
 			temporal.ApplicationErrorOptions{NonRetryable: true})
 	}
 
-	out := httpapi.SendRequestOutput{
+	out := httpapi.RequestOutput{
 		StatusCode:     int64(resp.StatusCode),
 		Status:         resp.Status,
-		Headers:        httpapi.SendRequestOutputHeaders{AdditionalProperties: resp.Header},
+		Headers:        httpapi.RequestOutputHeaders{AdditionalProperties: resp.Header},
 		Body:           string(body),
 		DurationMillis: elapsed,
 	}
 	redactResponse(&out, secrets)
 	if err := a.ApplyStatus(ctx, req, resp.StatusCode, out); err != nil {
-		return httpapi.SendRequestOutput{}, err
+		return httpapi.RequestOutput{}, err
 	}
 	return out, nil
 }
 
-// ApplyStatus makes out, a response SendRequest returned for req, count as if the endpoint had
-// answered with status. It is what SendRequest itself does with every response, exported for an
-// activity that calls SendRequest and finds the real answer in the body, such as a 200 whose body
+// ApplyStatus makes out, a response Request returned for req, count as if the endpoint had
+// answered with status. It is what Request itself does with every response, exported for an
+// activity that calls Request and finds the real answer in the body, such as a 200 whose body
 // says the caller is rate limited:
 //
-//	resp, err := a.SendRequest(ctx, req)
+//	resp, err := a.Request(ctx, req)
 //	if err == nil && bodySaysRateLimited(resp) {
 //		return nil, a.ApplyStatus(ctx, req, http.StatusTooManyRequests, resp)
 //	}
@@ -300,14 +303,14 @@ func (a *HTTPActivities) SendRequest(ctx context.Context, req httpapi.SendReques
 // activity must return, with out in its details, by the status's type (see categorizeError):
 //
 //   - RateLimited (429): marks req's rate-limit key, so every call on this worker with the same
-//     key waits out the window without being sent, and the next attempt waits the window too.
-//   - Transient: the next attempt backs off as for any Transient error (1s, doubling up to 30s),
-//     counting Transient errors in a row through the activity's heartbeat details.
+//     key waits out the window without being sent, and the next attempt waits the window too. A
+//     Retry-After header in out shorter than the window is the wait instead (see retryAfter).
+//   - Transient: the next attempt waits the retry policy's backoff.
 //   - ClientError: not retried.
 //
-// ctx must be the activity's context. out should be SendRequest's response, which is already
+// ctx must be the activity's context. out should be Request's response, which is already
 // redacted; ApplyStatus doesn't redact it again.
-func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.SendRequestInput, status int, out httpapi.SendRequestOutput) error {
+func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.RequestInput, status int, out httpapi.RequestOutput) error {
 	key := RateLimitKey(req)
 	if status >= 200 && status < 300 {
 		a.lim.clear(key)
@@ -320,13 +323,15 @@ func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.SendReques
 	}
 	errType := categorizeError(status)
 	if errType == ErrorTypeRateLimited {
-		// Every call on this worker with the same key now waits out the window.
-		a.lim.mark(key, time.Now())
-		activity.GetLogger(ctx).Warn("Rate limited", "status", status, "key", key, "window", a.lim.ttl.String())
-		return rateLimitedError(ctx, msg, a.lim.ttl, out)
+		// Every call on this worker with the same key now waits as long as this one.
+		now := time.Now()
+		wait := retryAfter(out, now, a.lim.ttl)
+		a.lim.mark(key, now, wait)
+		activity.GetLogger(ctx).Warn("Rate limited", "status", status, "key", key, "retryIn", wait.String())
+		return rateLimitedError(msg, wait, out)
 	}
 	if errType == ErrorTypeTransient {
-		return transientError(ctx, msg, out)
+		return transientError(msg, out)
 	}
 	return temporal.NewApplicationErrorWithOptions(msg, errType, temporal.ApplicationErrorOptions{
 		Details:      []any{out},
@@ -336,7 +341,7 @@ func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.SendReques
 
 // attemptTimedOut reports whether err is the attempt running out its timeoutSeconds. Other
 // timeouts, such as the transport's 30-second dial timeout, keep Go's own message.
-func attemptTimedOut(err error, start time.Time, req httpapi.SendRequestInput) bool {
+func attemptTimedOut(err error, start time.Time, req httpapi.RequestInput) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout(req)
 }
@@ -362,7 +367,7 @@ func redact(s string, secrets []string) string {
 
 // redactResponse redacts secrets from everything in out that came from the endpoint, which can
 // echo what it was sent.
-func redactResponse(out *httpapi.SendRequestOutput, secrets []string) {
+func redactResponse(out *httpapi.RequestOutput, secrets []string) {
 	if len(secrets) == 0 {
 		return
 	}

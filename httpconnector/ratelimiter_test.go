@@ -15,13 +15,13 @@ func TestLimiterTTL(t *testing.T) {
 	require.Zero(t, l.remaining("k", base)) // nothing cached yet
 
 	// mark starts a TTL window; remaining counts down within it.
-	l.mark("k", base)
+	l.mark("k", base, l.ttl)
 	require.Equal(t, 30*time.Second, l.remaining("k", base.Add(30*time.Second)))
 	require.Zero(t, l.remaining("k", base.Add(time.Minute))) // at expiry -> expired + evicted
 	require.Zero(t, l.remaining("k", base))                  // eviction is permanent
 
 	// clear ends a live window early.
-	l.mark("k", base)
+	l.mark("k", base, l.ttl)
 	l.clear("k")
 	require.Zero(t, l.remaining("k", base.Add(time.Second)))
 }
@@ -32,8 +32,8 @@ func TestLimiterKeysAreIndependent(t *testing.T) {
 	l := newLimiter(time.Minute)
 	base := time.Unix(1000, 0)
 
-	l.mark("a", base)
-	l.mark("b", base.Add(30*time.Second))
+	l.mark("a", base, l.ttl)
+	l.mark("b", base.Add(30*time.Second), l.ttl)
 	require.Zero(t, l.remaining("c", base))
 
 	// a expires; b keeps the rest of its own window.
@@ -41,7 +41,7 @@ func TestLimiterKeysAreIndependent(t *testing.T) {
 	require.Equal(t, 30*time.Second, l.remaining("b", base.Add(time.Minute)))
 
 	// Clearing b leaves a's new window alone.
-	l.mark("a", base.Add(time.Minute))
+	l.mark("a", base.Add(time.Minute), l.ttl)
 	l.clear("b")
 	require.Zero(t, l.remaining("b", base.Add(time.Minute)))
 	require.Equal(t, time.Minute, l.remaining("a", base.Add(time.Minute)))
@@ -52,9 +52,9 @@ func TestLimiterMarkEvictsExpired(t *testing.T) {
 	l := newLimiter(time.Minute)
 	base := time.Unix(1000, 0)
 
-	l.mark("a", base)
-	l.mark("b", base.Add(30*time.Second))
-	l.mark("c", base.Add(time.Minute)) // a has expired; b hasn't
+	l.mark("a", base, l.ttl)
+	l.mark("b", base.Add(30*time.Second), l.ttl)
+	l.mark("c", base.Add(time.Minute), l.ttl) // a has expired; b hasn't
 	require.Len(t, l.until, 2)
 	require.Equal(t, 30*time.Second, l.remaining("b", base.Add(time.Minute)))
 }

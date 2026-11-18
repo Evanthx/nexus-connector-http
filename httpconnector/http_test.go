@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 	"go.temporal.io/sdk/activity"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
@@ -38,19 +38,19 @@ func anySecretHost(a *HTTPActivities) *HTTPActivities {
 // testWindow is the rate-limit window the tests use, independent of the environment.
 const testWindow = 2 * time.Minute
 
-// runSendRequest runs SendRequest in the activity test environment, so activity.GetLogger works.
+// runRequest runs Request in the activity test environment, so activity.GetLogger works.
 // It runs against a, so the rate-limit cache keeps its state between calls.
-func runSendRequest(t *testing.T, a *HTTPActivities, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+func runRequest(t *testing.T, a *HTTPActivities, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
 	t.Helper()
 	var ts testsuite.WorkflowTestSuite
 	env := ts.NewTestActivityEnvironment()
-	env.RegisterActivity(a.SendRequest)
+	env.RegisterActivity(a.Request)
 
-	val, err := env.ExecuteActivity(a.SendRequest, req)
+	val, err := env.ExecuteActivity(a.Request, req)
 	if err != nil {
-		return httpapi.SendRequestOutput{}, err
+		return httpapi.RequestOutput{}, err
 	}
-	var resp httpapi.SendRequestOutput
+	var resp httpapi.RequestOutput
 	require.NoError(t, val.Get(&resp))
 	return resp, nil
 }
@@ -109,7 +109,7 @@ func TestCategorizeError(t *testing.T) {
 	}
 }
 
-func TestSendRequest_Success(t *testing.T) {
+func TestRequest_Success(t *testing.T) {
 	type seen struct{ method, query, header, body string }
 	got := make(chan seen, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -121,11 +121,11 @@ func TestSendRequest_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resp, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{
+	resp, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{
 		URL:         srv.URL,
-		Method:      new(httpapi.SendRequestInputMethodPost),
-		QueryParams: &httpapi.SendRequestInputQueryParams{AdditionalProperties: map[string]string{"foo": "bar"}},
-		Headers:     &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"X-H": "hv"}},
+		Method:      new(httpapi.RequestInputMethodPost),
+		QueryParams: &httpapi.RequestInputQueryParams{AdditionalProperties: map[string]string{"foo": "bar"}},
+		Headers:     &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"X-H": "hv"}},
 		Body:        new(`{"a":1}`),
 	})
 	require.NoError(t, err)
@@ -136,14 +136,14 @@ func TestSendRequest_Success(t *testing.T) {
 	require.Equal(t, []string{"ok"}, resp.Headers.AdditionalProperties["X-Resp"])
 }
 
-func TestSendRequest_DefaultsToGet(t *testing.T) {
+func TestRequest_DefaultsToGet(t *testing.T) {
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got <- r.Method
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL})
 	require.NoError(t, err)
 	require.Equal(t, http.MethodGet, <-got)
 }
@@ -183,22 +183,22 @@ func itemsServer(t *testing.T) *httptest.Server {
 
 // A GET and a POST each return the endpoint's status code and body: as the result on success,
 // and in the error's details on failure.
-func TestSendRequest_GETAndPOST(t *testing.T) {
+func TestRequest_GETAndPOST(t *testing.T) {
 	srv := itemsServer(t)
-	get := func(path string) httpapi.SendRequestInput {
-		return httpapi.SendRequestInput{URL: srv.URL + path}
+	get := func(path string) httpapi.RequestInput {
+		return httpapi.RequestInput{URL: srv.URL + path}
 	}
-	post := func(path, body string) httpapi.SendRequestInput {
-		return httpapi.SendRequestInput{
+	post := func(path, body string) httpapi.RequestInput {
+		return httpapi.RequestInput{
 			URL:     srv.URL + path,
-			Method:  new(httpapi.SendRequestInputMethodPost),
-			Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"Content-Type": "application/json"}},
+			Method:  new(httpapi.RequestInputMethodPost),
+			Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"Content-Type": "application/json"}},
 			Body:    new(body),
 		}
 	}
 	for _, tc := range []struct {
 		name       string
-		req        httpapi.SendRequestInput
+		req        httpapi.RequestInput
 		wantStatus int64
 		wantBody   string
 		wantErr    string // the error type; empty for success
@@ -210,7 +210,7 @@ func TestSendRequest_GETAndPOST(t *testing.T) {
 		{"GET of a failing endpoint fails with its body", get("/broken"), 503, "try later", ErrorTypeTransient},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := runSendRequest(t, newWithWindow(testWindow), tc.req)
+			resp, err := runRequest(t, newWithWindow(testWindow), tc.req)
 			if tc.wantErr != "" {
 				ae := appErr(t, err)
 				require.Equal(t, tc.wantErr, ae.Type())
@@ -224,7 +224,7 @@ func TestSendRequest_GETAndPOST(t *testing.T) {
 	}
 }
 
-func TestSendRequest_Classifies(t *testing.T) {
+func TestRequest_Classifies(t *testing.T) {
 	for _, tc := range []struct {
 		status       int
 		wantType     string
@@ -237,12 +237,12 @@ func TestSendRequest_Classifies(t *testing.T) {
 		{500, ErrorTypeTransient, false},
 	} {
 		srv, _ := countingServer(t, tc.status, "why")
-		_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL})
+		_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL})
 		ae := appErr(t, err)
 		require.Equal(t, tc.wantType, ae.Type(), "status %d", tc.status)
 		require.Equal(t, tc.wantNonRetry, ae.NonRetryable(), "status %d", tc.status)
 
-		var resp httpapi.SendRequestOutput
+		var resp httpapi.RequestOutput
 		require.NoError(t, ae.Details(&resp), "status %d", tc.status)
 		require.Equal(t, int64(tc.status), resp.StatusCode)
 		require.Equal(t, "why", resp.Body)
@@ -250,19 +250,19 @@ func TestSendRequest_Classifies(t *testing.T) {
 }
 
 // A server that can't be reached fails with a retryable Transient error.
-func TestSendRequest_NetworkFailureIsTransient(t *testing.T) {
+func TestRequest_NetworkFailureIsTransient(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: url})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: url})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeTransient, ae.Type())
 	require.False(t, ae.NonRetryable())
 }
 
 // A server slower than timeoutSeconds fails with a retryable Transient error.
-func TestSendRequest_TimeoutIsTransient(t *testing.T) {
+func TestRequest_TimeoutIsTransient(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -274,7 +274,7 @@ func TestSendRequest_TimeoutIsTransient(t *testing.T) {
 	defer close(release)
 
 	start := time.Now()
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeTransient, ae.Type())
 	require.False(t, ae.NonRetryable())
@@ -284,7 +284,7 @@ func TestSendRequest_TimeoutIsTransient(t *testing.T) {
 
 // A response whose body is still arriving when timeoutSeconds runs out fails with a retryable
 // Transient error that names timeoutSeconds.
-func TestSendRequest_BodyTimeoutIsTransient(t *testing.T) {
+func TestRequest_BodyTimeoutIsTransient(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "partial")
@@ -297,7 +297,7 @@ func TestSendRequest_BodyTimeoutIsTransient(t *testing.T) {
 	defer srv.Close()
 	defer close(release)
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeTransient, ae.Type())
 	require.False(t, ae.NonRetryable())
@@ -306,11 +306,11 @@ func TestSendRequest_BodyTimeoutIsTransient(t *testing.T) {
 
 // A TLS certificate that doesn't verify fails with a non-retryable ClientError: the next attempt
 // would get the same certificate.
-func TestSendRequest_BadCertificateIsClientError(t *testing.T) {
+func TestRequest_BadCertificateIsClientError(t *testing.T) {
 	srv := httptest.NewTLSServer(http.NotFoundHandler())
 	defer srv.Close()
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeClientError, ae.Type())
 	require.True(t, ae.NonRetryable())
@@ -318,9 +318,9 @@ func TestSendRequest_BadCertificateIsClientError(t *testing.T) {
 }
 
 // A request that can't be made fails with a non-retryable InvalidRequest, without being sent.
-func TestSendRequest_InvalidRequestIsNotSent(t *testing.T) {
+func TestRequest_InvalidRequestIsNotSent(t *testing.T) {
 	srv, hits := countingServer(t, 200, "")
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL, APIKeyParam: new("key")})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL, APIKeyParam: new("key")})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeInvalidRequest, ae.Type())
 	require.True(t, ae.NonRetryable())
@@ -329,25 +329,25 @@ func TestSendRequest_InvalidRequestIsNotSent(t *testing.T) {
 
 // An invalid request is reported as invalid even while its rate-limit key is cached: retrying it
 // after the window would fail anyway.
-func TestSendRequest_InvalidBeatsRateLimit(t *testing.T) {
+func TestRequest_InvalidBeatsRateLimit(t *testing.T) {
 	a := newWithWindow(testWindow)
-	req := httpapi.SendRequestInput{URL: "ftp://x.test"}
-	a.lim.mark(RateLimitKey(req), time.Now())
+	req := httpapi.RequestInput{URL: "ftp://x.test"}
+	a.lim.mark(RateLimitKey(req), time.Now(), a.lim.ttl)
 
-	_, err := runSendRequest(t, a, req)
+	_, err := runRequest(t, a, req)
 	require.Equal(t, ErrorTypeInvalidRequest, appErr(t, err).Type())
 }
 
 // A live cache entry fails the call with RateLimited without sending it, and the next attempt
 // waits until the entry expires.
-func TestSendRequest_GateBlocksWhenCached(t *testing.T) {
+func TestRequest_GateBlocksWhenCached(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	srv, hits := countingServer(t, 200, "")
 	a := anySecretHost(newWithWindow(testWindow))
-	req := httpapi.SendRequestInput{URL: srv.URL, Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}
-	a.lim.mark(RateLimitKey(req), time.Now().Add(-20*time.Second)) // 20s of the window gone
+	req := httpapi.RequestInput{URL: srv.URL, Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}
+	a.lim.mark(RateLimitKey(req), time.Now().Add(-20*time.Second), a.lim.ttl) // 20s of the window gone
 
-	_, err := runSendRequest(t, a, req)
+	_, err := runRequest(t, a, req)
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeRateLimited, ae.Type())
 	require.False(t, ae.NonRetryable())
@@ -356,23 +356,63 @@ func TestSendRequest_GateBlocksWhenCached(t *testing.T) {
 }
 
 // A 429 caches the key and delays the next attempt by the whole window.
-func TestSendRequest_429CachesKey(t *testing.T) {
+func TestRequest_429CachesKey(t *testing.T) {
 	srv, _ := countingServer(t, 429, "")
 	a := newWithWindow(testWindow)
-	req := httpapi.SendRequestInput{URL: srv.URL}
+	req := httpapi.RequestInput{URL: srv.URL}
 	key := RateLimitKey(req)
 	require.Zero(t, a.lim.remaining(key, time.Now()))
 
-	_, err := runSendRequest(t, a, req)
+	_, err := runRequest(t, a, req)
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeRateLimited, ae.Type())
 	require.Equal(t, testWindow, ae.NextRetryDelay())
 	require.Positive(t, a.lim.remaining(key, time.Now()))
 }
 
+// A 429's Retry-After, in seconds or as an HTTP date, sets the wait, for this call and for every
+// call with its key, when it is shorter than the window. Otherwise the window does.
+func TestRequest_429RetryAfter(t *testing.T) {
+	inSecs := func(d time.Duration) string { return strconv.Itoa(int(d / time.Second)) }
+	date := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(http.TimeFormat) }
+	for _, tc := range []struct {
+		name, header string
+		want         time.Duration
+	}{
+		{"seconds", "10", 10 * time.Second},
+		{"date", date(30 * time.Second), 30 * time.Second},
+		{"seconds longer than the window", inSecs(testWindow + time.Second), testWindow},
+		{"date later than the window", date(testWindow + time.Minute), testWindow},
+		{"huge seconds", "99999999999999999", testWindow},
+		{"none", "", testWindow},
+		{"zero", "0", testWindow},
+		{"past date", date(-time.Minute), testWindow},
+		{"unparseable", "soon", testWindow},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.header != "" {
+					w.Header().Set("Retry-After", tc.header)
+				}
+				w.WriteHeader(http.StatusTooManyRequests)
+			}))
+			defer srv.Close()
+			a := newWithWindow(testWindow)
+			req := httpapi.RequestInput{URL: srv.URL}
+
+			_, err := runRequest(t, a, req)
+			ae := appErr(t, err)
+			require.Equal(t, ErrorTypeRateLimited, ae.Type())
+			// An HTTP date has whole seconds, so it can come out up to a second short.
+			require.InDelta(t, tc.want, ae.NextRetryDelay(), float64(time.Second))
+			require.InDelta(t, tc.want, a.lim.remaining(RateLimitKey(req), time.Now()), float64(time.Second))
+		})
+	}
+}
+
 // The rate-limit window starts when the 429 arrives, not when the request was sent, so a slow 429
 // doesn't shorten it.
-func TestSendRequest_WindowStartsAtThe429(t *testing.T) {
+func TestRequest_WindowStartsAtThe429(t *testing.T) {
 	const slow = time.Second
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(slow) //nolint:forbidigo // a server that answers slowly is what this test is about
@@ -380,27 +420,27 @@ func TestSendRequest_WindowStartsAtThe429(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := newWithWindow(testWindow)
-	req := httpapi.SendRequestInput{URL: srv.URL}
+	req := httpapi.RequestInput{URL: srv.URL}
 
-	_, err := runSendRequest(t, a, req)
+	_, err := runRequest(t, a, req)
 	require.Equal(t, ErrorTypeRateLimited, appErr(t, err).Type())
 	require.Greater(t, a.lim.remaining(RateLimitKey(req), time.Now()), testWindow-slow/2)
 }
 
 // A success clears its key, even one another call marked while this request was in flight, and
 // leaves other keys alone.
-func TestSendRequest_SuccessClearsKey(t *testing.T) {
+func TestRequest_SuccessClearsKey(t *testing.T) {
 	a := newWithWindow(testWindow)
 	var key string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a.lim.mark(key, time.Now()) // a concurrent call got a 429 for the same key
+		a.lim.mark(key, time.Now(), a.lim.ttl) // a concurrent call got a 429 for the same key
 	}))
 	defer srv.Close()
-	req := httpapi.SendRequestInput{URL: srv.URL}
+	req := httpapi.RequestInput{URL: srv.URL}
 	key = RateLimitKey(req)
-	a.lim.mark("other", time.Now())
+	a.lim.mark("other", time.Now(), a.lim.ttl)
 
-	_, err := runSendRequest(t, a, req)
+	_, err := runRequest(t, a, req)
 	require.NoError(t, err)
 	require.Zero(t, a.lim.remaining(key, time.Now()))
 	require.Positive(t, a.lim.remaining("other", time.Now()))
@@ -408,7 +448,7 @@ func TestSendRequest_SuccessClearsKey(t *testing.T) {
 
 // A 429 limits only its own URL and caller: the same URL with another username or an API key, and
 // the same username on another URL, still go out, and their successes don't reopen the limited key.
-func TestSendRequest_429LimitsOnlyItsOwnKey(t *testing.T) {
+func TestRequest_429LimitsOnlyItsOwnKey(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	var mu sync.Mutex
 	hits := map[string]int{} // "user path" -> requests received
@@ -423,22 +463,22 @@ func TestSendRequest_429LimitsOnlyItsOwnKey(t *testing.T) {
 	}))
 	defer srv.Close()
 	a := anySecretHost(newWithWindow(testWindow))
-	bobOnA := httpapi.SendRequestInput{URL: srv.URL + "/a", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}
+	bobOnA := httpapi.RequestInput{URL: srv.URL + "/a", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}
 
-	_, err := runSendRequest(t, a, bobOnA)
+	_, err := runRequest(t, a, bobOnA)
 	require.Equal(t, ErrorTypeRateLimited, appErr(t, err).Type())
 
-	for name, req := range map[string]httpapi.SendRequestInput{
+	for name, req := range map[string]httpapi.RequestInput{
 		"another user, same URL":   {URL: srv.URL + "/a", Username: new("alice"), APIKeyEnvVar: new(testSecretVar)},
 		"an API key, same URL":     {URL: srv.URL + "/a", APIKeyEnvVar: new(testSecretVar)},
 		"same user, another URL":   {URL: srv.URL + "/b", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)},
 		"no credentials, same URL": {URL: srv.URL + "/a"},
 	} {
-		_, err := runSendRequest(t, a, req)
+		_, err := runRequest(t, a, req)
 		require.NoError(t, err, name)
 	}
 
-	_, err = runSendRequest(t, a, bobOnA)
+	_, err = runRequest(t, a, bobOnA)
 	require.Equal(t, ErrorTypeRateLimited, appErr(t, err).Type())
 	mu.Lock()
 	defer mu.Unlock()
@@ -446,88 +486,51 @@ func TestSendRequest_429LimitsOnlyItsOwnKey(t *testing.T) {
 	require.Equal(t, map[string]int{"bob /a": 1, "alice /a": 1, " /a": 2, "bob /b": 1}, hits)
 }
 
-// retryDelays runs one attempt per status against a server that answers with those statuses in
-// turn, the way the server retries the activity: each attempt gets the heartbeat details the one
-// before it recorded, and the rate-limit window has passed by the time it runs. It returns the
-// NextRetryDelay each attempt asked for.
-func retryDelays(t *testing.T, statuses ...int) []time.Duration {
-	t.Helper()
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(statuses[hits.Add(1)-1])
-	}))
-	defer srv.Close()
-	a := newWithWindow(testWindow)
-	req := httpapi.SendRequestInput{URL: srv.URL}
-
-	var delays []time.Duration
-	var details *int
-	for range statuses {
-		a.lim.clear(RateLimitKey(req)) // the window has passed
-		var ts testsuite.WorkflowTestSuite
-		env := ts.NewTestActivityEnvironment()
-		env.RegisterActivity(a.SendRequest)
-		if details != nil {
-			env.SetHeartbeatDetails(*details)
-		}
-		env.SetOnActivityHeartbeatListener(func(_ *activity.Info, d converter.EncodedValues) {
-			var n int
-			require.NoError(t, d.Get(&n))
-			details = &n
-		})
-		_, err := env.ExecuteActivity(a.SendRequest, req)
-		delays = append(delays, appErr(t, err).NextRetryDelay())
-	}
-	return delays
-}
-
-// Transient errors back off from 1s, doubling up to 30s. After a rate limit, the window is the
-// wait, and the next Transient error starts again from 1s rather than continuing from the attempt
-// count.
-func TestSendRequest_RetryDelays(t *testing.T) {
-	const s = time.Second
+// Transient errors leave the next attempt's delay to the retry policy; RateLimited errors set it
+// to the window.
+func TestRequest_RetryDelays(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		statuses []int
-		want     []time.Duration
+		status int
+		want   time.Duration
 	}{
-		{"transient only", []int{503, 503, 503}, []time.Duration{1 * s, 2 * s, 4 * s}},
-		{"rate limited, then transient", []int{429, 503, 503, 503}, []time.Duration{testWindow, 1 * s, 2 * s, 4 * s}},
-		{"rate limited twice, then transient", []int{429, 429, 503}, []time.Duration{testWindow, testWindow, 1 * s}},
-		{"transient, rate limited, transient", []int{503, 503, 429, 503}, []time.Duration{1 * s, 2 * s, testWindow, 1 * s}},
-		{"backoff is capped at 30s", []int{503, 503, 503, 503, 503, 503, 503}, []time.Duration{1 * s, 2 * s, 4 * s, 8 * s, 16 * s, 30 * s, 30 * s}},
+		{503, 0},
+		{408, 0},
+		{429, testWindow},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, retryDelays(t, tc.statuses...))
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			srv, _ := countingServer(t, tc.status, "")
+			_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL})
+			ae := appErr(t, err)
+			require.False(t, ae.NonRetryable())
+			require.Equal(t, tc.want, ae.NextRetryDelay())
 		})
 	}
 }
 
-// runRemapped runs an activity that calls SendRequest and, on success, applies status instead, as
-// a library caller does when a 2xx body says the request failed. It starts with the heartbeat
-// details given, if any, and returns those the attempt recorded, to pass to the next attempt.
-func runRemapped(t *testing.T, a *HTTPActivities, req httpapi.SendRequestInput, status int, heartbeat *int) (*int, error) {
+// The retry policy backs off 5s, then three times longer each attempt, at most 5m apart.
+func TestActivityOptions_RetryPolicy(t *testing.T) {
+	p := ActivityOptions("id", time.Hour).RetryPolicy
+	require.Equal(t, 5*time.Second, p.InitialInterval)
+	require.InDelta(t, 3.0, p.BackoffCoefficient, 0)
+	require.Equal(t, 5*time.Minute, p.MaximumInterval)
+	require.Zero(t, p.MaximumAttempts, "only the ScheduleToCloseTimeout ends the retries")
+}
+
+// runRemapped runs an activity that calls Request and, on success, applies status instead, as
+// a library caller does when a 2xx body says the request failed.
+func runRemapped(t *testing.T, a *HTTPActivities, req httpapi.RequestInput, status int) error {
 	t.Helper()
 	var ts testsuite.WorkflowTestSuite
 	env := ts.NewTestActivityEnvironment()
-	env.RegisterActivityWithOptions(func(ctx context.Context, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
-		out, err := a.SendRequest(ctx, req)
+	env.RegisterActivityWithOptions(func(ctx context.Context, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
+		out, err := a.Request(ctx, req)
 		if err != nil {
-			return httpapi.SendRequestOutput{}, err
+			return httpapi.RequestOutput{}, err
 		}
-		return httpapi.SendRequestOutput{}, a.ApplyStatus(ctx, req, status, out)
+		return httpapi.RequestOutput{}, a.ApplyStatus(ctx, req, status, out)
 	}, activity.RegisterOptions{Name: "Remapped"})
-	if heartbeat != nil {
-		env.SetHeartbeatDetails(*heartbeat)
-	}
-	var recorded *int
-	env.SetOnActivityHeartbeatListener(func(_ *activity.Info, d converter.EncodedValues) {
-		var n int
-		require.NoError(t, d.Get(&n))
-		recorded = &n
-	})
 	_, err := env.ExecuteActivity("Remapped", req)
-	return recorded, err
+	return err
 }
 
 // A 200 the caller remaps to 429 marks the rate-limit key, as a real 429 does: the activity waits
@@ -535,55 +538,49 @@ func runRemapped(t *testing.T, a *HTTPActivities, req httpapi.SendRequestInput, 
 func TestApplyStatus_RemappedRateLimit(t *testing.T) {
 	srv, hits := countingServer(t, 200, "slow down")
 	a := newWithWindow(testWindow)
-	req := httpapi.SendRequestInput{URL: srv.URL}
+	req := httpapi.RequestInput{URL: srv.URL}
 
-	_, err := runRemapped(t, a, req, http.StatusTooManyRequests, nil)
+	err := runRemapped(t, a, req, http.StatusTooManyRequests)
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeRateLimited, ae.Type())
 	require.Equal(t, testWindow, ae.NextRetryDelay())
 	require.Equal(t, fmt.Sprintf("%s returned status 200, treated as 429", srv.URL), ae.Message())
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	require.NoError(t, ae.Details(&out))
 	require.Equal(t, int64(200), out.StatusCode)
 	require.Equal(t, "slow down", out.Body)
 
-	_, err = runSendRequest(t, a, req)
+	_, err = runRequest(t, a, req)
 	require.Equal(t, ErrorTypeRateLimited, appErr(t, err).Type())
 	require.Equal(t, int32(1), hits.Load(), "the second request must be held back by the cache")
 }
 
-// A 200 the caller remaps to 503 backs off as a real 503 does: 1s, then 2s, counting through the
-// heartbeat details.
-func TestApplyStatus_RemappedTransientBacksOff(t *testing.T) {
+// A 200 the caller remaps to 503 is retried as a real 503 is, with the retry policy's backoff.
+func TestApplyStatus_RemappedTransient(t *testing.T) {
 	srv, _ := countingServer(t, 200, "try again later")
 	a := newWithWindow(testWindow)
-	req := httpapi.SendRequestInput{URL: srv.URL}
+	req := httpapi.RequestInput{URL: srv.URL}
 
-	heartbeat, err := runRemapped(t, a, req, http.StatusServiceUnavailable, nil)
-	ae := appErr(t, err)
+	ae := appErr(t, runRemapped(t, a, req, http.StatusServiceUnavailable))
 	require.Equal(t, ErrorTypeTransient, ae.Type())
 	require.False(t, ae.NonRetryable())
-	require.Equal(t, time.Second, ae.NextRetryDelay())
-	require.NotNil(t, heartbeat)
-
-	_, err = runRemapped(t, a, req, http.StatusServiceUnavailable, heartbeat)
-	require.Equal(t, 2*time.Second, appErr(t, err).NextRetryDelay())
+	require.Zero(t, ae.NextRetryDelay())
 }
 
 // A 200 the caller remaps to a 4xx fails with a non-retryable ClientError.
 func TestApplyStatus_RemappedClientError(t *testing.T) {
 	srv, _ := countingServer(t, 200, "no such item")
-	_, err := runRemapped(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL}, http.StatusNotFound, nil)
+	err := runRemapped(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL}, http.StatusNotFound)
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeClientError, ae.Type())
 	require.True(t, ae.NonRetryable())
 }
 
 func TestRateLimitKey(t *testing.T) {
-	require.Equal(t, "https://x.test|bob", RateLimitKey(httpapi.SendRequestInput{URL: "https://x.test", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}))
-	require.Equal(t, "https://x.test|"+testSecretVar, RateLimitKey(httpapi.SendRequestInput{URL: "https://x.test", APIKeyEnvVar: new(testSecretVar)}))
-	require.Equal(t, "https://x.test|anon", RateLimitKey(httpapi.SendRequestInput{URL: "https://x.test"}))
-	authVar := httpapi.SendRequestInput{URL: "https://x.test", Headers: &httpapi.SendRequestInputHeaders{
+	require.Equal(t, "https://x.test|bob", RateLimitKey(httpapi.RequestInput{URL: "https://x.test", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}))
+	require.Equal(t, "https://x.test|"+testSecretVar, RateLimitKey(httpapi.RequestInput{URL: "https://x.test", APIKeyEnvVar: new(testSecretVar)}))
+	require.Equal(t, "https://x.test|anon", RateLimitKey(httpapi.RequestInput{URL: "https://x.test"}))
+	authVar := httpapi.RequestInput{URL: "https://x.test", Headers: &httpapi.RequestInputHeaders{
 		AdditionalProperties: map[string]string{"authorization": testSecretVar},
 	}}
 	require.Equal(t, "https://x.test|"+testSecretVar, RateLimitKey(authVar))
@@ -594,7 +591,7 @@ func TestRateLimitKey(t *testing.T) {
 // An Authorization header whose value is a secret variable's name is sent as that variable's
 // value, whatever the header key's case. Any other Authorization value is sent as it is. The
 // value never appears in the error message.
-func TestSendRequest_AuthorizationFromEnvVar(t *testing.T) {
+func TestRequest_AuthorizationFromEnvVar(t *testing.T) {
 	t.Setenv(testSecretVar, "Bearer s3cr3t")
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -607,9 +604,9 @@ func TestSendRequest_AuthorizationFromEnvVar(t *testing.T) {
 		testSecretVar:    "Bearer s3cr3t",
 		"Bearer literal": "Bearer literal",
 	} {
-		_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+		_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 			URL:     srv.URL,
-			Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"authorization": header}},
+			Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"authorization": header}},
 		})
 		require.Equal(t, want, <-got)
 		ae := appErr(t, err)
@@ -619,7 +616,7 @@ func TestSendRequest_AuthorizationFromEnvVar(t *testing.T) {
 }
 
 // The API key goes in the named query parameter. It never appears in the error message.
-func TestSendRequest_APIKeyAsQueryParam(t *testing.T) {
+func TestRequest_APIKeyAsQueryParam(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -628,7 +625,7 @@ func TestSendRequest_APIKeyAsQueryParam(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -641,12 +638,12 @@ func TestSendRequest_APIKeyAsQueryParam(t *testing.T) {
 
 // A request that fails on the network doesn't put the URL it sent, which has the API key in its
 // query, in the error message.
-func TestSendRequest_NetworkErrorHidesAPIKey(t *testing.T) {
+func TestRequest_NetworkErrorHidesAPIKey(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	srv := httptest.NewServer(nil)
 	srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -659,7 +656,7 @@ func TestSendRequest_NetworkErrorHidesAPIKey(t *testing.T) {
 
 // A redirect the client can't follow doesn't put the API key in the error, even when the server
 // echoes it, escaped, in the Location header.
-func TestSendRequest_RedirectErrorHidesAPIKey(t *testing.T) {
+func TestRequest_RedirectErrorHidesAPIKey(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t/x")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "/%zz?"+r.URL.RawQuery) // unparseable
@@ -667,7 +664,7 @@ func TestSendRequest_RedirectErrorHidesAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -679,7 +676,7 @@ func TestSendRequest_RedirectErrorHidesAPIKey(t *testing.T) {
 	require.NotContains(t, ae.Error(), "s3cr3t")
 }
 
-// trustTLS makes SendRequest, which uses http.DefaultTransport, trust srv's test certificate for
+// trustTLS makes Request, which uses http.DefaultTransport, trust srv's test certificate for
 // the rest of the test. It changes a process-wide value, so a test that uses it can't run in
 // parallel.
 func trustTLS(t *testing.T, srv *httptest.Server) {
@@ -692,7 +689,7 @@ func trustTLS(t *testing.T, srv *httptest.Server) {
 
 // A redirect from https to http isn't followed, so nothing goes to the http server, credentials
 // included. The redirect itself fails as a ClientError with its response.
-func TestSendRequest_NoRedirectFromHTTPSToHTTP(t *testing.T) {
+func TestRequest_NoRedirectFromHTTPSToHTTP(t *testing.T) {
 	t.Setenv(testSecretVar, "Bearer s3cr3t")
 	plain, hits := countingServer(t, 200, "")
 	srv := httptest.NewTLSServer(http.RedirectHandler(plain.URL, http.StatusFound))
@@ -701,13 +698,13 @@ func TestSendRequest_NoRedirectFromHTTPSToHTTP(t *testing.T) {
 	a := anySecretHost(newWithWindow(testWindow))
 	a.allowRedirects = true
 
-	_, err := runSendRequest(t, a, httpapi.SendRequestInput{
+	_, err := runRequest(t, a, httpapi.RequestInput{
 		URL:     srv.URL,
-		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"Authorization": testSecretVar}},
+		Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"Authorization": testSecretVar}},
 	})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeClientError, ae.Type())
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	require.NoError(t, ae.Details(&out))
 	require.Equal(t, int64(http.StatusFound), out.StatusCode)
 	require.Equal(t, []string{plain.URL}, out.Headers.AdditionalProperties["Location"])
@@ -716,7 +713,7 @@ func TestSendRequest_NoRedirectFromHTTPSToHTTP(t *testing.T) {
 
 // A secret the endpoint echoes back is redacted from the response's headers and body, as is and
 // as escaped in JSON.
-func TestSendRequest_RedactsEchoedSecrets(t *testing.T) {
+func TestRequest_RedactsEchoedSecrets(t *testing.T) {
 	t.Setenv(testSecretVar, `s3cr\3t`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.URL.Query().Get("key")
@@ -731,13 +728,13 @@ func TestSendRequest_RedactsEchoedSecrets(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
 	})
 	ae := appErr(t, err)
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	require.NoError(t, ae.Details(&out))
 	require.Equal(t, `[REDACTED] {"key":"[REDACTED]"}`, out.Body)
 	require.Equal(t, []string{"[REDACTED]"}, out.Headers.AdditionalProperties["X-Echo"])
@@ -745,23 +742,23 @@ func TestSendRequest_RedactsEchoedSecrets(t *testing.T) {
 
 // The redacted value of an Authorization variable includes its credentials without the scheme,
 // which an endpoint can echo alone.
-func TestSendRequest_RedactsAuthorizationCredentials(t *testing.T) {
+func TestRequest_RedactsAuthorizationCredentials(t *testing.T) {
 	t.Setenv(testSecretVar, "Bearer s3cr3t")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "token "+strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	}))
 	defer srv.Close()
 
-	out, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	out, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:     srv.URL,
-		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"Authorization": testSecretVar}},
+		Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"Authorization": testSecretVar}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "token [REDACTED]", out.Body)
 }
 
 // A secret Go quotes in an error message, escaping its backslash, is redacted too.
-func TestSendRequest_RedirectErrorHidesQuotedAPIKey(t *testing.T) {
+func TestRequest_RedirectErrorHidesQuotedAPIKey(t *testing.T) {
 	t.Setenv(testSecretVar, `s3cr\3t`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "/%zz?"+r.URL.Query().Get("key")) // unparseable
@@ -769,7 +766,7 @@ func TestSendRequest_RedirectErrorHidesQuotedAPIKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:          srv.URL,
 		APIKeyEnvVar: new(testSecretVar),
 		APIKeyParam:  new("key"),
@@ -781,7 +778,7 @@ func TestSendRequest_RedirectErrorHidesQuotedAPIKey(t *testing.T) {
 }
 
 // Redirects stop after maxRedirects, as with http.Client's default policy.
-func TestSendRequest_RedirectLimit(t *testing.T) {
+func TestRequest_RedirectLimit(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -791,20 +788,20 @@ func TestSendRequest_RedirectLimit(t *testing.T) {
 
 	a := newWithWindow(testWindow)
 	a.allowRedirects = true
-	_, err := runSendRequest(t, a, httpapi.SendRequestInput{URL: srv.URL})
+	_, err := runRequest(t, a, httpapi.RequestInput{URL: srv.URL})
 	require.ErrorContains(t, err, "stopped after 10 redirects")
 	require.Equal(t, int32(maxRedirects), hits.Load())
 }
 
 // A body of up to maxResponseBytes is returned; a longer one fails with a non-retryable
 // ClientError instead of being read into memory.
-func TestSendRequest_ResponseSizeLimit(t *testing.T) {
+func TestRequest_ResponseSizeLimit(t *testing.T) {
 	for _, tc := range []struct {
 		size    int
 		wantErr bool
 	}{{maxResponseBytes, false}, {maxResponseBytes + 1, true}, {10 * maxResponseBytes, true}} {
 		srv, _ := countingServer(t, 200, strings.Repeat("x", tc.size))
-		out, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL})
+		out, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL})
 		if !tc.wantErr {
 			require.NoError(t, err)
 			require.Len(t, out.Body, tc.size)
@@ -818,7 +815,7 @@ func TestSendRequest_ResponseSizeLimit(t *testing.T) {
 }
 
 // With no apiKeyParam, the API key goes in an Authorization Bearer header.
-func TestSendRequest_APIKeyAsBearerHeader(t *testing.T) {
+func TestRequest_APIKeyAsBearerHeader(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	got := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -826,14 +823,14 @@ func TestSendRequest_APIKeyAsBearerHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
 	require.NoError(t, err)
 	require.Equal(t, "Bearer s3cr3t", <-got)
 }
 
 // With a username, the API key is the basic auth password instead of a Bearer token. The key
 // never appears in the error message, and an echo of the encoded header is redacted.
-func TestSendRequest_BasicAuth(t *testing.T) {
+func TestRequest_BasicAuth(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	type creds struct {
 		user, pass string
@@ -848,7 +845,7 @@ func TestSendRequest_BasicAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:          srv.URL,
 		Username:     new("bob"),
 		APIKeyEnvVar: new(testSecretVar),
@@ -856,18 +853,18 @@ func TestSendRequest_BasicAuth(t *testing.T) {
 	require.Equal(t, creds{"bob", "s3cr3t", true}, <-got)
 	ae := appErr(t, err)
 	require.NotContains(t, ae.Error(), "s3cr3t")
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	require.NoError(t, ae.Details(&out))
 	require.Equal(t, "Basic [REDACTED]", out.Body)
 }
 
 // A variable without the prefix is refused, even when it is set, and the request isn't sent: a
 // caller must not be able to send any of the Connector's environment to a URL it chooses.
-func TestSendRequest_APIKeyEnvVarNeedsPrefix(t *testing.T) {
+func TestRequest_APIKeyEnvVarNeedsPrefix(t *testing.T) {
 	t.Setenv("TEMPORAL_API_KEY_FOR_TEST", "s3cr3t")
 	srv, hits := countingServer(t, 200, "")
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new("TEMPORAL_API_KEY_FOR_TEST")})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL, APIKeyEnvVar: new("TEMPORAL_API_KEY_FOR_TEST")})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeInvalidRequest, ae.Type())
 	require.True(t, ae.NonRetryable())
@@ -880,7 +877,7 @@ func TestSendRequest_APIKeyEnvVarNeedsPrefix(t *testing.T) {
 // method is rejected when it is decoded, before the operation or the activity sees it.
 func TestContract_RejectsUnlistedMethod(t *testing.T) {
 	for _, method := range []string{"FROB", "get"} {
-		var req httpapi.SendRequestInput
+		var req httpapi.RequestInput
 		err := json.Unmarshal([]byte(`{"url":"https://x.test","method":"`+method+`"}`), &req)
 		ae := appErr(t, err)
 		require.Equal(t, "PayloadValidationError", ae.Type())
@@ -897,47 +894,47 @@ func TestValidate(t *testing.T) {
 	t.Setenv(SecretEnvPrefix+"NEWLINE", "s3cr3t\n")
 	for _, tc := range []struct {
 		name    string
-		req     httpapi.SendRequestInput
+		req     httpapi.RequestInput
 		wantErr string // empty: valid
 	}{
-		{"https", httpapi.SendRequestInput{URL: "https://x.test/a?b=c"}, ""},
-		{"http with method", httpapi.SendRequestInput{URL: "http://x.test", Method: new(httpapi.SendRequestInputMethodDelete)}, ""},
-		{"api key", httpapi.SendRequestInput{URL: "https://x.test", APIKeyEnvVar: new(testSecretVar), APIKeyParam: new("key")}, ""},
-		{"empty URL", httpapi.SendRequestInput{}, "scheme must be http or https"},
-		{"relative URL", httpapi.SendRequestInput{URL: "/path"}, "scheme must be http or https"},
-		{"other scheme", httpapi.SendRequestInput{URL: "ftp://x.test"}, "scheme must be http or https"},
-		{"no host", httpapi.SendRequestInput{URL: "https:///path"}, "no host"},
-		{"unparseable URL", httpapi.SendRequestInput{URL: "https://x.test/%zz"}, "invalid URL"},
-		{"bad method", httpapi.SendRequestInput{URL: "https://x.test", Method: new(httpapi.SendRequestInputMethod("BAD METHOD"))}, "can't build the request"},
-		{"key without prefix", httpapi.SendRequestInput{URL: "https://x.test", APIKeyEnvVar: new("HOME")}, "must start with " + SecretEnvPrefix},
-		{"key unset", httpapi.SendRequestInput{URL: "https://x.test", APIKeyEnvVar: new(SecretEnvPrefix + "UNSET")}, "unset or empty"},
-		{"key empty", httpapi.SendRequestInput{URL: "https://x.test", APIKeyEnvVar: new(SecretEnvPrefix + "EMPTY")}, "unset or empty"},
-		{"authorization from a variable", httpapi.SendRequestInput{URL: "https://x.test", Headers: &httpapi.SendRequestInputHeaders{
+		{"https", httpapi.RequestInput{URL: "https://x.test/a?b=c"}, ""},
+		{"http with method", httpapi.RequestInput{URL: "http://x.test", Method: new(httpapi.RequestInputMethodDelete)}, ""},
+		{"api key", httpapi.RequestInput{URL: "https://x.test", APIKeyEnvVar: new(testSecretVar), APIKeyParam: new("key")}, ""},
+		{"empty URL", httpapi.RequestInput{}, "scheme must be http or https"},
+		{"relative URL", httpapi.RequestInput{URL: "/path"}, "scheme must be http or https"},
+		{"other scheme", httpapi.RequestInput{URL: "ftp://x.test"}, "scheme must be http or https"},
+		{"no host", httpapi.RequestInput{URL: "https:///path"}, "no host"},
+		{"unparseable URL", httpapi.RequestInput{URL: "https://x.test/%zz"}, "invalid URL"},
+		{"bad method", httpapi.RequestInput{URL: "https://x.test", Method: new(httpapi.RequestInputMethod("BAD METHOD"))}, "can't build the request"},
+		{"key without prefix", httpapi.RequestInput{URL: "https://x.test", APIKeyEnvVar: new("HOME")}, "must start with " + SecretEnvPrefix},
+		{"key unset", httpapi.RequestInput{URL: "https://x.test", APIKeyEnvVar: new(SecretEnvPrefix + "UNSET")}, "unset or empty"},
+		{"key empty", httpapi.RequestInput{URL: "https://x.test", APIKeyEnvVar: new(SecretEnvPrefix + "EMPTY")}, "unset or empty"},
+		{"authorization from a variable", httpapi.RequestInput{URL: "https://x.test", Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"Authorization": testSecretVar},
 		}}, ""},
-		{"authorization from an unset variable", httpapi.SendRequestInput{URL: "https://x.test", Headers: &httpapi.SendRequestInputHeaders{
+		{"authorization from an unset variable", httpapi.RequestInput{URL: "https://x.test", Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"Authorization": SecretEnvPrefix + "UNSET"},
 		}}, `"` + SecretEnvPrefix + `UNSET" is unset or empty`},
-		{"header value with a newline", httpapi.SendRequestInput{URL: "https://x.test", Headers: &httpapi.SendRequestInputHeaders{
+		{"header value with a newline", httpapi.RequestInput{URL: "https://x.test", Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"X-A": "a\r\nX-B: b"},
 		}}, `header "X-A" has an invalid value`},
-		{"header name with a space", httpapi.SendRequestInput{URL: "https://x.test", Headers: &httpapi.SendRequestInputHeaders{
+		{"header name with a space", httpapi.RequestInput{URL: "https://x.test", Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"X A": "a"},
 		}}, `invalid header name "X A"`},
-		{"authorization variable with a newline", httpapi.SendRequestInput{URL: "https://x.test", Headers: &httpapi.SendRequestInputHeaders{
+		{"authorization variable with a newline", httpapi.RequestInput{URL: "https://x.test", Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"Authorization": SecretEnvPrefix + "NEWLINE"},
 		}}, `header "Authorization" has an invalid value`},
-		{"username with a key", httpapi.SendRequestInput{URL: "https://x.test", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}, ""},
-		{"username without a key", httpapi.SendRequestInput{URL: "https://x.test", Username: new("bob")}, "username needs apiKeyEnvVar"},
-		{"username with a query key", httpapi.SendRequestInput{
+		{"username with a key", httpapi.RequestInput{URL: "https://x.test", Username: new("bob"), APIKeyEnvVar: new(testSecretVar)}, ""},
+		{"username without a key", httpapi.RequestInput{URL: "https://x.test", Username: new("bob")}, "username needs apiKeyEnvVar"},
+		{"username with a query key", httpapi.RequestInput{
 			URL: "https://x.test", Username: new("bob"), APIKeyEnvVar: new(testSecretVar), APIKeyParam: new("key"),
 		}, "username can't be used with apiKeyParam"},
-		{"param without key", httpapi.SendRequestInput{URL: "https://x.test", APIKeyParam: new("key")}, "apiKeyEnvVar is not"},
-		{"shortest timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(1))}, ""},
-		{"longest timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(60))}, ""},
-		{"zero timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(0))}, "between 1 and 60"},
-		{"negative timeout", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(-5))}, "between 1 and 60"},
-		{"timeout over the attempt limit", httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(61))}, "between 1 and 60"},
+		{"param without key", httpapi.RequestInput{URL: "https://x.test", APIKeyParam: new("key")}, "apiKeyEnvVar is not"},
+		{"shortest timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(1))}, ""},
+		{"longest timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(60))}, ""},
+		{"zero timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(0))}, "between 1 and 60"},
+		{"negative timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(-5))}, "between 1 and 60"},
+		{"timeout over the attempt limit", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(61))}, "between 1 and 60"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Validate(tc.req)

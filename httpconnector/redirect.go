@@ -14,7 +14,7 @@ const AllowRedirectsEnvVar = "HTTP_CONNECTOR_ALLOW_REDIRECTS"
 // checkRedirect returns the http.Client CheckRedirect policy for a request whose secretHeaders,
 // from secretHeaderVars, were filled from the Connector's secret variables.
 //
-// Unless AllowRedirectsEnvVar is true, no redirect is followed: SendRequest gets the 3xx itself as
+// Unless AllowRedirectsEnvVar is true, no redirect is followed: Request gets the 3xx itself as
 // the response, which fails as a ClientError. Otherwise it is http.Client's default policy (at
 // most 10 redirects, enforced here because setting CheckRedirect replaces it), except:
 //
@@ -22,7 +22,7 @@ const AllowRedirectsEnvVar = "HTTP_CONNECTOR_ALLOW_REDIRECTS"
 //     the Authorization header in plaintext. The 3xx fails as a ClientError, as above.
 //   - A redirect to a host that isn't an allowed domain (AllowedDomainsEnvVar) isn't followed, so
 //     an allowed site can't send the request elsewhere. It fails with a redirectNotAllowedError,
-//     which SendRequest turns into a ClientError naming the host.
+//     which Request turns into a ClientError naming the host.
 //   - Referer is never sent: http.Client sets it to the previous URL, query included, which would
 //     carry an apiKeyParam key to the next host.
 //   - Once a redirect leaves the original host and its subdomains, the secret headers are dropped
@@ -71,7 +71,7 @@ func leftSite(req *http.Request, via []*http.Request) bool {
 }
 
 // redirectNotAllowedError is checkRedirect's error for a redirect to a host that isn't an allowed
-// domain. SendRequest turns it into a ClientError.
+// domain. Request turns it into a ClientError.
 type redirectNotAllowedError struct {
 	host string
 }

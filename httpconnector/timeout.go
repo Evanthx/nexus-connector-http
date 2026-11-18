@@ -29,7 +29,7 @@ const callbackMargin = 10 * time.Second
 //
 // It reports an error if the operation has too little time left for one attempt
 // (timeoutSeconds) plus callbackMargin, or if the header can't be read.
-func (a *HTTPActivities) ScheduleToClose(req httpapi.SendRequestInput, operationTimeout string) (time.Duration, error) {
+func (a *HTTPActivities) ScheduleToClose(req httpapi.RequestInput, operationTimeout string) (time.Duration, error) {
 	if operationTimeout == "" {
 		return a.MaxDuration(), nil
 	}

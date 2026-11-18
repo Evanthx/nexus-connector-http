@@ -29,13 +29,13 @@ docs/
 A Temporal connector that makes **outbound HTTP requests** for workflows in other namespaces (Go,
 module `github.com/temporalio/nexus-connector-http`). It runs as one program, the Nexus
 Connector, called the Connector from here on. It serves one Nexus operation,
-`HTTPService.sendRequest`, behind a Nexus endpoint. A caller sends a `SendRequestInput` (URL,
-method, headers, query parameters, body, credentials) and gets a `SendRequestOutput` (status,
+`HTTPService.request`, behind a Nexus endpoint. A caller sends a `RequestInput` (URL,
+method, headers, query parameters, body, credentials) and gets a `RequestOutput` (status,
 headers, body) back. It is write-only: it makes the request it is given and returns the response,
 and never polls.
 
 The operation is backed by a **standalone activity**, not a workflow: it calls
-`temporalnexus.StartActivity` to start `SendRequest`, and the server completes the Nexus operation
+`temporalnexus.StartActivity` to start `Request`, and the server completes the Nexus operation
 through a completion callback when the activity finishes. The server's activity retry policy does
 all retrying.
 
@@ -116,9 +116,9 @@ Other languages generate types from `http.nexusrpc.yaml` with nexgen (docs/clien
 
 ```go
 c := workflow.NewNexusClient("http-endpoint", httpapi.HTTPService.ServiceName)
-req := httpapi.SendRequestInput{URL: "https://api.example.com/items"}
-var resp httpapi.SendRequestOutput
-err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
+req := httpapi.RequestInput{URL: "https://api.example.com/items"}
+var resp httpapi.RequestOutput
+err := c.ExecuteOperation(ctx, httpapi.HTTPService.Request, req, workflow.NexusOperationOptions{
     ScheduleToCloseTimeout: time.Hour, // the Connector retries until 10s before this
 }).Get(ctx, &resp)
 ```
@@ -170,7 +170,7 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   maximum). Give the operation a short timeout when trying things out.
 - **The rate-limit cache is per Connector process and in memory.** A 429 holds back every request with the
   same key (URL plus username, else key variable name, else `Authorization` variable name, else
-  `anon`) for the window, without sending them. Restarting the Connector clears it; several Connector
+  `anon`) for the window, or the 429's `Retry-After` if shorter, without sending them. Restarting the Connector clears it; several Connector
   processes each probe on their own.
 - **`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required**; the Connector won't start without it. With
   `DISABLE ALLOWLIST`, the Connector calls any URL, including ones on its own network. Tell the user
@@ -214,14 +214,14 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
 ## Errors
 
 Every failure is an `ApplicationError` whose `Type` is an `httpconnector.ErrorType*` constant;
-callers find it with `errors.As`. For an HTTP response, `Details` holds the `SendRequestOutput`.
+callers find it with `errors.As`. For an HTTP response, `Details` holds the `RequestOutput`.
 
 | Type | Cause | Retried |
 |---|---|---|
 | `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, a caller timeout under `timeoutSeconds` + 10s, a host not in the allowed domains, a secret whose `_DOMAINS` list doesn't hold the host, invalid header name or value, two header names differing only in case, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
 | `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a redirect to a host not in the allowed domains (message `redirected to "<host>", which is not on the Connector's list of allowed domains`, details the 3xx with its `Location`); a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
-| `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 1s×2 up to 30s |
-| `RateLimited` | 429, or the key is in the rate-limit cache. | After the window |
+| `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 5s×3 up to 5m (5s, 15s, 45s, 2m15s, 5m, …) |
+| `RateLimited` | 429, or the key is in the rate-limit cache. | After the window, or a shorter `Retry-After` |
 
 A request that breaks the contract (unknown field, unlisted method, no `url`) fails before the
 operation runs: a `PayloadValidationError` when a Go caller encodes it, or a `BAD_REQUEST`
@@ -240,7 +240,7 @@ make configui   # serve the setup page on http://localhost:8090
 make test       # go test -race; includes testcaller's end-to-end test, which needs the temporal CLI
 make lint       # golangci-lint
 make ci         # vet, workflowcheck, lint, test
-go test ./httpconnector -run TestSendRequest_429CachesKey -v   # single test
+go test ./httpconnector -run TestRequest_429CachesKey -v   # single test
 go test -short ./...                                           # skip the end-to-end test
 ```
 
@@ -248,8 +248,8 @@ go test -short ./...                                           # skip the end-to
 
 - The contract is `http.nexusrpc.yaml`. After editing it, run `make generate` and commit
   `generated/httpapi`; CI fails if it is stale. Never edit generated code. The service and
-  operation `fqn`s pin the wire names `HTTPService`/`sendRequest`; without them nexgen would derive
-  `SendRequest`. Keep them. Optional fields are pointers; `method` and `timeoutSeconds` have
+  operation `fqn`s pin the wire names `HTTPService`/`request`; without them nexgen would derive
+  `Request`. Keep them. Optional fields are pointers; `method` and `timeoutSeconds` have
   `…OrDefault()` accessors. The generated `MarshalJSON`/`UnmarshalJSON` validate against the
   contract.
 - **A new environment variable goes in `httpconnector/settings.go` only**: a `settings.Define`
@@ -262,7 +262,7 @@ go test -short ./...                                           # skip the end-to
   are read through `secretsFamily.Lookup` from `HTTPActivities.env`.
 - Outside the package, `cmd/worker` and `testcaller` use only `TaskQueue`, `Register`,
   `ClientOptions`, the `ErrorType*` constants and `AllowedDomainsEnvVar`; `configui` uses
-  `Settings`, `NewWithEnv`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`, `SendRequest`) and
+  `Settings`, `NewWithEnv`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`, `Request`) and
   `SecretEnvPrefix`. `New`, `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
   `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
@@ -284,7 +284,7 @@ request through the code.
 
 - `http.nexusrpc.yaml` — the contract; `generated/httpapi` is generated from it.
 - `httpconnector/` — nearly all logic.
-  - `http.go`: `TaskQueue`; `Register`, which builds the Nexus operation inline; the `SendRequest`
+  - `http.go`: `TaskQueue`; `Register`, which builds the Nexus operation inline; the `Request`
     activity; `ApplyStatus`, which turns a response's status into the result (clears or marks the
     rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
     whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
@@ -298,23 +298,22 @@ request through the code.
   - The operation validates first (`build` with `a.env`, as `Validate` does, then `CheckDomain`, then `ScheduleToClose` from
     the `operation-timeout` header) and returns a `BadRequest` handler error (cause: an
     `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
-    `SendRequest` with `ActivityOptions(id, total)`. Activity ID is `"http-" + Nexus request ID`, so a
+    `Request` with `ActivityOptions(id, total)`. Activity ID is `"http-" + Nexus request ID`, so a
     retried Nexus start reaches the same activity.
   - `ActivityOptions`: StartToClose `attemptTimeout` 60s, which also caps `timeoutSeconds`;
-    ScheduleToClose from `ScheduleToClose`; no attempt limit; policy
-    backoff 1s×2 up to 30s, which now applies only to attempt timeouts.
+    ScheduleToClose from `ScheduleToClose`; no attempt limit; policy backoff 5s×3 up to 5m, used
+    by Transient errors and attempt timeouts.
   - `request.go`: `build`, in steps `parseURL`, `checkTimeouts`, `setQuery` (query parameters, a
     query API key, and the `username`/`apiKeyParam` check), `setHeaders` (headers, the
     variable any header names via `secretEnv`, which reads it from `a.env` through `secretsFamily`, basic or Bearer auth, `httpguts` validation). Also
     `secretHeaderVars` (header → variable, for every header whose value starts with the prefix),
     `Validate`, `apiKey`, `RateLimitKey`, `secrets(req)`.
-  - `errors.go`: the `ErrorType*` constants and the retry delays. `transientError` sets
-    `NextRetryDelay` 1s×2 up to 30s, counting only Transient failures in a row; the count passes
-    between attempts as heartbeat details, and a RateLimited error resets it to 0.
-    `rateLimitedError` waits the rest of the window. There is no loop in the activity.
+  - `errors.go`: the `ErrorType*` constants. `transientError` leaves the delay to the retry
+    policy; `rateLimitedError` sets `NextRetryDelay` to the rest of the window, or a 429's shorter
+    `Retry-After`. There is no loop in the activity.
   - `allowlist.go`: `AllowedDomainsEnvVar`, read by `New()` into `HTTPActivities.domains` (required; nil,
     from `DisableAllowlist`, = any host); `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
-    operation and again by `SendRequest` before sending. Matches the lower-cased host without port
+    operation and again by `Request` before sending. Matches the lower-cased host without port
     or trailing dot, exactly or as a subdomain at a dot boundary; an IP address, as entry or host,
     only exactly.
   - `timeout.go`: `MaxDurationEnvVar` (default 25h, read by `New()` into
@@ -323,15 +322,17 @@ request through the code.
     maximum, or an error if under `timeoutSeconds`. The server rewrites the header at dispatch, so
     queue time is already subtracted.
   - `ratelimiter.go`: the `limiter`, owned by `HTTPActivities`. A 429 marks the key; while marked,
-    `SendRequest` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
-    entries. It takes an explicit `now`. The window is read by `httpconnector.New()`, through
+    `Request` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
+    entries. It takes an explicit `now`. `retryAfter` reads a 429's `Retry-After` (seconds or an
+    HTTP date) and returns it if shorter than the window, else the window; `mark` holds the key
+    that long. The window is read by `httpconnector.New()`, through
     `minutes` in `settings.go`, which `MaxDurationEnvVar` shares.
 - `secretdomains.go`: `SecretDomainsSuffix`; `readSecretDomains(env.Environ())`, `secretsFamily`'s
   check, read by `New()`
   into `HTTPActivities.secretDomains` (secret variable → domains, nil = any allowed host; a
   variable not in it is sent nowhere), which reports every secret without a list and every list
   without a secret, naming variables only; `CheckSecretDomains`, called by the operation after
-  `CheckDomain` and again by `SendRequest`, which matches the host as `CheckDomain` does; and
+  `CheckDomain` and again by `Request`, which matches the host as `CheckDomain` does; and
   `requestSecretVars`; `CheckSecretsAllowed`, for the setup page, which reports a secret's domain
   outside the allowlist. `secretEnv` refuses a `_DOMAINS` variable as a secret. Redirects need no
   check of their own: secrets reach only the original host and its subdomains (see `redirect.go`),
@@ -345,14 +346,14 @@ request through the code.
     `http.ErrUseLastResponse` for every redirect, so the 3xx becomes a `ClientError` with its
     response. On, it is Go's default policy (10 redirects, re-enforced since setting `CheckRedirect`
     drops it) except that it doesn't follow https → http (`http.ErrUseLastResponse`); refuses a hop
-    to a host `allowedHost` rejects with a `redirectNotAllowedError`, which `SendRequest` turns into
+    to a host `allowedHost` rejects with a `redirectNotAllowedError`, which `Request` turns into
     a non-retryable `ClientError` naming the host, with the 3xx's status and headers in its details;
     deletes `Referer` (Go sets it to the previous URL, query key included); and, once `leftSite`
     (any hop not the original host or a subdomain of it, sticky as in Go), deletes every header from
     `secretHeaderVars`. Go itself drops `Authorization` and `Cookie` there. Keep the two conditions
     in step: ours must strip whenever Go's does. Any new way the Connector puts a secret into a
     header must be added to `secretHeaderVars` so a redirect drops it.
-- Non-2xx errors carry the `SendRequestOutput` in `Details`. A body over `maxResponseBytes`
+- Non-2xx errors carry the `RequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.
 - `cmd/worker` — the Connector's process: `ClientOptions(settings.OS())`, `worker.New` on
   `TaskQueue`, `Register`.
@@ -364,7 +365,7 @@ request through the code.
   `MaskURLPassword`).
 - `configui/` — the setup page, never imported by the Connector. `main.go`, `temporal.go` and
   `index.html` are generic (the page renders only from `/api/settings`); `connector.go` lists this
-  repo's programs, test fields and `checkConnector`, which runs `SendRequest` once in the SDK's test
+  repo's programs, test fields and `checkConnector`, which runs `Request` once in the SDK's test
   activity environment. A test runs against `settings.Map` built from the process's environment with
   the page's values in place of every variable `Settings` owns; nothing calls `os.Setenv`. External
   variables (the proxies) come from the process's environment only: the page shows them read-only,
@@ -378,8 +379,8 @@ request through the code.
 
 See [docs/testing.md](docs/testing.md) for how to run the test workflow and the test suites.
 
-- `httpconnector/` — `SendRequest` in the SDK's activity test environment against `httptest`
-  servers (helpers `runSendRequest`, `appErr`, `countingServer`), plus `Validate` and
+- `httpconnector/` — `Request` in the SDK's activity test environment against `httptest`
+  servers (helpers `runRequest`, `appErr`, `countingServer`), plus `Validate` and
   `categorizeError`. The limiter takes an explicit `now` (`ratelimiter_test.go`). Tests use
   `newWithWindow(testWindow)` rather than the environment variable; it allows no secret anywhere,
   so tests that send secrets but aren't about their domains wrap it in `anySecretHost`.

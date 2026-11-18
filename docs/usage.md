@@ -11,13 +11,13 @@ The input has a field for each part of an HTTP request (method, URL, headers, qu
 ```go
 c := workflow.NewNexusClient("http-endpoint", httpapi.HTTPService.ServiceName)
 
-req := httpapi.SendRequestInput{
+req := httpapi.RequestInput{
     URL:    "https://api.example.com/items",           // required
-    Method: new(httpapi.SendRequestInputMethodPost),   // optional; GET if unset
-    Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{
+    Method: new(httpapi.RequestInputMethodPost),   // optional; GET if unset
+    Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{
         "Content-Type": "application/json",
     }},
-    QueryParams: &httpapi.SendRequestInputQueryParams{AdditionalProperties: map[string]string{
+    QueryParams: &httpapi.RequestInputQueryParams{AdditionalProperties: map[string]string{
         "source": "workflow",
     }},
     Body:         new(`{"name":"widget"}`),               // optional
@@ -27,8 +27,8 @@ req := httpapi.SendRequestInput{
     TimeoutSeconds: new(int64(10)),                       // optional; 30 if unset
 }
 
-var resp httpapi.SendRequestOutput
-err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
+var resp httpapi.RequestOutput
+err := c.ExecuteOperation(ctx, httpapi.HTTPService.Request, req, workflow.NexusOperationOptions{
     ScheduleToCloseTimeout: time.Hour, // the Connector retries until 10 seconds before this
 }).Get(ctx, &resp)
 // On success: resp.StatusCode, resp.Status, resp.Headers, resp.Body, resp.DurationMillis.
@@ -65,7 +65,7 @@ You can also start the operation directly with an HTTP POST to the server's Nexu
 ```bash
 ID=$(temporal operator nexus endpoint get --name http-endpoint --output json | jq -r .id)
 curl --include \
-  --request POST "http://localhost:7243/nexus/endpoints/$ID/services/HTTPService/sendRequest" \
+  --request POST "http://localhost:7243/nexus/endpoints/$ID/services/HTTPService/request" \
   --header 'Content-Type: application/json' \
   --header 'Nexus-Request-Id: my-request-1' \
   --data '{"url": "https://httpbin.org/get"}'
@@ -76,7 +76,7 @@ The response is `201 Created` with an operation token. The activity ID is `http-
 
 ## Options
 
-Every field of `SendRequestInput`. A request with an unknown field or an unlisted method is rejected before the operation runs.
+Every field of `RequestInput`. A request with an unknown field or an unlisted method is rejected before the operation runs.
 
 | Field | Required | Default | What it does |
 |---|---|---|---|
@@ -90,7 +90,7 @@ Every field of `SendRequestInput`. A request with an unknown field or an unliste
 | `apiKeyParam` | No | none | Query parameter to put the API key in. If unset, the key goes in the `Authorization` header: as the basic auth password if `username` is set, otherwise as `Bearer <key>`. Needs `apiKeyEnvVar`. |
 | `timeoutSeconds` | No | 30 | Timeout for one attempt, 1 to 60 seconds. |
 
-`SendRequestOutput` has `statusCode`, `status` (such as `200 OK`), `headers` (each name with a list of values), `body`, and `durationMillis`.
+`RequestOutput` has `statusCode`, `status` (such as `200 OK`), `headers` (each name with a list of values), `body`, and `durationMillis`.
 
 ## API keys and secrets
 

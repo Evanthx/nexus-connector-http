@@ -7,7 +7,7 @@ and a bad request fails in your code, with the field named, before it is sent.
 ## The contract
 
 The Connector's operations are defined in one file, [`http.nexusrpc.yaml`](../http.nexusrpc.yaml),
-its *contract*. It names the service (`HTTPService`), its operation (`sendRequest`), and the input
+its *contract*. It names the service (`HTTPService`), its operation (`request`), and the input
 and output types as JSON Schema. It is the source of truth for what a request may contain; the
 Connector rejects anything it doesn't allow.
 

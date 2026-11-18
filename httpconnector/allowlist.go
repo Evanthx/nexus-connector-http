@@ -88,7 +88,7 @@ func domainProblem(d string) string {
 
 // CheckDomain reports an error if rawURL's host isn't allowed by AllowedDomainsEnvVar: it must be
 // one of the domains or a subdomain of one. With the allowlist disabled, every host is allowed. The
-// sendRequest operation calls it before starting the activity, and SendRequest before sending.
+// request operation calls it before starting the activity, and Request before sending.
 func (a *HTTPActivities) CheckDomain(rawURL string) error {
 	if a.domains == nil {
 		return nil

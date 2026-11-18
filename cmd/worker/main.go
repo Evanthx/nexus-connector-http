@@ -1,5 +1,5 @@
 // Command worker runs the Connector, the HTTP connector's one program: the HTTPService Nexus
-// service and the SendRequest activity its operation starts.
+// service and the Request activity its operation starts.
 //
 // It connects with the standard Temporal client configuration: the TEMPORAL_* environment
 // variables and the profile file the temporal CLI uses. The namespace defaults to

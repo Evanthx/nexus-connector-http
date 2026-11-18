@@ -96,7 +96,8 @@ var rateLimitSetting = settings.Define(settings.Variable{
 	Name:    RateLimitMinutesEnvVar,
 	Default: "5",
 	Help: "How long a rate-limit key (the URL plus who is calling) is held back after a 429 response, in whole " +
-		"minutes, at least 1. Until then, requests with that key fail as `RateLimited` without being sent.",
+		"minutes, at least 1. Until then, requests with that key fail as `RateLimited` without being sent. A " +
+		"`Retry-After` header on the 429 that asks for less time is used instead.",
 }, minutes(RateLimitMinutesEnvVar, defaultRateLimitWindow))
 
 var maxDurationSetting = settings.Define(settings.Variable{

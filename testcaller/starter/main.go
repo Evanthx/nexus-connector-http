@@ -26,13 +26,13 @@ func main() {
 	timeout := flag.Duration("timeout", 0, "The Nexus operation's timeout, such as 10m; the Connector retries until shortly before it. 0 means none, so the Connector's maximum applies (25h by default)")
 	flag.Parse()
 
-	m := httpapi.SendRequestInputMethod(*method)
+	m := httpapi.RequestInputMethod(*method)
 	headers := map[string]string{"X-Demo-Header": "nexus-connector-http"}
-	req := httpapi.SendRequestInput{
+	req := httpapi.RequestInput{
 		URL:         *url,
 		Method:      &m,
-		QueryParams: &httpapi.SendRequestInputQueryParams{AdditionalProperties: map[string]string{"source": "temporal-nexus"}},
-		Headers:     &httpapi.SendRequestInputHeaders{AdditionalProperties: headers},
+		QueryParams: &httpapi.RequestInputQueryParams{AdditionalProperties: map[string]string{"source": "temporal-nexus"}},
+		Headers:     &httpapi.RequestInputHeaders{AdditionalProperties: headers},
 	}
 	if *body != "" {
 		req.Body = body
@@ -58,7 +58,7 @@ func main() {
 	}
 	log.Printf("Started workflow %s", run.GetID())
 
-	var resp httpapi.SendRequestOutput
+	var resp httpapi.RequestOutput
 	if err := run.Get(context.Background(), &resp); err != nil {
 		var appErr *temporal.ApplicationError
 		if errors.As(err, &appErr) {

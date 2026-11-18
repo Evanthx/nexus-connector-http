@@ -35,15 +35,15 @@ func TestAllowRedirects(t *testing.T) {
 
 // By default no redirect is followed, even to the same host: the 3xx fails as a ClientError with
 // its response, and its target never gets the request.
-func TestSendRequest_RedirectsOffByDefault(t *testing.T) {
+func TestRequest_RedirectsOffByDefault(t *testing.T) {
 	target, hits := countingServer(t, http.StatusOK, "ok")
 	srv := redirectingServer(t, target.URL+"/landing")
 
-	_, err := runSendRequest(t, newWithWindow(testWindow), httpapi.SendRequestInput{URL: srv.URL})
+	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeClientError, ae.Type())
 	require.True(t, ae.NonRetryable())
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	require.NoError(t, ae.Details(&out))
 	require.Equal(t, int64(http.StatusFound), out.StatusCode)
 	require.Equal(t, []string{target.URL + "/landing"}, out.Headers.AdditionalProperties["Location"])
@@ -52,7 +52,7 @@ func TestSendRequest_RedirectsOffByDefault(t *testing.T) {
 
 // Any header, not only Authorization, can name a secret variable: the variable's value is sent,
 // and an echo of it is redacted. An unset variable fails with InvalidRequest without sending.
-func TestSendRequest_HeaderNamesSecret(t *testing.T) {
+func TestRequest_HeaderNamesSecret(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -60,17 +60,17 @@ func TestSendRequest_HeaderNamesSecret(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err := runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:     srv.URL,
-		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"x-api-key": testSecretVar}},
+		Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"x-api-key": testSecretVar}},
 	})
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	require.NoError(t, appErr(t, err).Details(&out))
 	require.Equal(t, "got [REDACTED]", out.Body, "the secret was sent, and its echo redacted")
 
-	_, err = runSendRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.SendRequestInput{
+	_, err = runRequest(t, anySecretHost(newWithWindow(testWindow)), httpapi.RequestInput{
 		URL:     srv.URL,
-		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"X-Api-Key": SecretEnvPrefix + "UNSET"}},
+		Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"X-Api-Key": SecretEnvPrefix + "UNSET"}},
 	})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeInvalidRequest, ae.Type())
@@ -95,7 +95,7 @@ func recordingServer(t *testing.T, ch chan<- sent) *httptest.Server {
 // With redirects on, a redirect within the original host keeps the secret headers, and one that
 // leaves it drops them, as Go drops Authorization. Referer, which would carry a query API key, is
 // never sent; a header with a literal value is.
-func TestSendRequest_RedirectDropsSecretsOffSite(t *testing.T) {
+func TestRequest_RedirectDropsSecretsOffSite(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	t.Setenv(SecretEnvPrefix+"AUTH", "Bearer t0ken")
 	got := make(chan sent, 1)
@@ -112,11 +112,11 @@ func TestSendRequest_RedirectDropsSecretsOffSite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := anySecretHost(newWithWindow(testWindow))
 			a.allowRedirects = true
-			_, err := runSendRequest(t, a, httpapi.SendRequestInput{
+			_, err := runRequest(t, a, httpapi.RequestInput{
 				URL:          redirectingServer(t, tc.target).URL,
 				APIKeyEnvVar: new(testSecretVar),
 				APIKeyParam:  new("key"),
-				Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{
+				Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{
 					"X-Api-Key":     testSecretVar,
 					"Authorization": SecretEnvPrefix + "AUTH",
 					"X-Literal":     "plain",
@@ -138,7 +138,7 @@ func TestSendRequest_RedirectDropsSecretsOffSite(t *testing.T) {
 
 // Once a redirect has left the original host, a later redirect back doesn't restore the secret
 // headers, as with Go's own Authorization.
-func TestSendRequest_RedirectBackDoesNotRestoreSecrets(t *testing.T) {
+func TestRequest_RedirectBackDoesNotRestoreSecrets(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	got := make(chan sent, 1)
 	target := recordingServer(t, got)
@@ -147,9 +147,9 @@ func TestSendRequest_RedirectBackDoesNotRestoreSecrets(t *testing.T) {
 	a := anySecretHost(newWithWindow(testWindow))
 	a.allowRedirects = true
 
-	_, err := runSendRequest(t, a, httpapi.SendRequestInput{
+	_, err := runRequest(t, a, httpapi.RequestInput{
 		URL:     redirectingServer(t, offSite).URL,
-		Headers: &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"X-Api-Key": testSecretVar}},
+		Headers: &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"X-Api-Key": testSecretVar}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, sent{path: "/landing"}, <-got)

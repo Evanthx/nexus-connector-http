@@ -1,7 +1,7 @@
 # Outbound HTTP Connector
 
 Makes an outbound HTTP request on behalf of a caller in another namespace. The `HTTPService`
-service has one operation, `sendRequest`. It takes a description of the request (URL, method,
+service has one operation, `request`. It takes a description of the request (URL, method,
 headers, query parameters, auth, body) and returns the response (status, headers, body).
 
 Failures are `ApplicationError`s whose type is `InvalidRequest`, `ClientError`, `Transient` or

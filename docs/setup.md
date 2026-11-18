@@ -83,7 +83,7 @@ Secrets, such as API keys, that requests name rather than carry, each with the h
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `HTTP_CONNECTOR_ALLOW_REDIRECTS` |  | false | `true` to follow redirects, up to 10, except from https to http and to a host not in `HTTP_CONNECTOR_ALLOWED_DOMAINS`; headers filled from a secret are dropped once a redirect leaves the original host. `false` follows none, even on the same host: the 3xx fails as a `ClientError` with its response. Takes any value Go's `strconv.ParseBool` does. See [Usage — redirects](usage.md#redirects). |
-| `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` |  | 5 | How long a rate-limit key (the URL plus who is calling) is held back after a 429 response, in whole minutes, at least 1. Until then, requests with that key fail as `RateLimited` without being sent. |
+| `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` |  | 5 | How long a rate-limit key (the URL plus who is calling) is held back after a 429 response, in whole minutes, at least 1. Until then, requests with that key fail as `RateLimited` without being sent. A `Retry-After` header on the 429 that asks for less time is used instead. |
 | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` |  | 1500 (25 hours) | The longest a call keeps retrying, in whole minutes, at least 1, when the caller's Nexus operation has a longer timeout or none. |
 
 ### Temporal

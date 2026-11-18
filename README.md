@@ -27,14 +27,14 @@ for another, following the principle of least privilege.
 **Durable HTTP calls, ready to use.** The HTTP connector makes HTTP requests for your workflows.
 It runs as one program, the Nexus Connector, called the Connector from here on: a Temporal worker,
 in the `connectors` namespace by default. A workflow describes a request (URL, method, headers, body, and which
-API key to use) and calls the Connector's one operation, `HTTPService.sendRequest`. The Connector
+API key to use) and calls the Connector's one operation, `HTTPService.request`. The Connector
 sends the request, retries it when retrying can help, and returns the response or the final error.
 
 ```
  your namespace                         namespace: connectors
 ┌──────────────────────┐    Nexus     ┌──────────────────────────────────────┐
-│ your workflow        │────────────▶ │ HTTPService.sendRequest              │
-│  sendRequest(req)    │              │   retries, rate-limit backoff,       │
+│ your workflow        │────────────▶ │ HTTPService.request                  │
+│  request(req)        │              │   retries, rate-limit backoff,       │
 │  → status, headers,  │ ◀─────────── │   timeouts, secrets ──▶ HTTP request │
 │    body              │              └──────────────────────────────────────┘
 └──────────────────────┘

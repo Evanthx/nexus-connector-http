@@ -3,22 +3,21 @@ $schema: https://json-schema.org/draft/2020-12/schema
 
 services:
   HTTPService:
-    # The wire names are pinned so that callers built against earlier versions still reach the
-    # service and operation.
+    # The wire names are pinned: without fqn, nexgen would capitalize them.
     fqn: HTTPService
     x-go-name: HTTPService
     description: "Makes outbound HTTP requests on behalf of callers in other namespaces."
     operations:
-      sendRequest:
-        fqn: sendRequest
+      request:
+        fqn: request
         description: "Make one HTTP request, with retries, and return the response."
         input:
-          $ref: "#/$defs/SendRequestInput"
+          $ref: "#/$defs/RequestInput"
         output:
-          $ref: "#/$defs/SendRequestOutput"
+          $ref: "#/$defs/RequestOutput"
 
 $defs:
-  SendRequestInput:
+  RequestInput:
     type: object
     properties:
       url:
@@ -62,7 +61,7 @@ $defs:
       - url
     additionalProperties: false
 
-  SendRequestOutput:
+  RequestOutput:
     type: object
     properties:
       statusCode:

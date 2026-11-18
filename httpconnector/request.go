@@ -26,14 +26,14 @@ const SecretEnvPrefix = "HTTP_CONNECTOR_SECRET_"
 // Validate reports why req can't be made, or nil if it can. The operation calls it before starting
 // the activity, so a bad request fails at once without an activity.
 // It reads any secret req names from the process's environment.
-func Validate(req httpapi.SendRequestInput) error {
+func Validate(req httpapi.RequestInput) error {
 	_, err := build(context.Background(), settings.OS(), req)
 	return err
 }
 
 // build turns req into an HTTP request, reading any secret it names from env. An error means the
 // request can't be made as given.
-func build(ctx context.Context, env settings.Env, req httpapi.SendRequestInput) (*http.Request, error) {
+func build(ctx context.Context, env settings.Env, req httpapi.RequestInput) (*http.Request, error) {
 	u, err := parseURL(req.URL)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func parseURL(rawURL string) (*url.URL, error) {
 }
 
 // checkTimeouts checks that req's timeoutSeconds fits in one attempt.
-func checkTimeouts(req httpapi.SendRequestInput) error {
+func checkTimeouts(req httpapi.RequestInput) error {
 	maxSecs := int64(attemptTimeout / time.Second)
 	if secs := req.TimeoutSecondsOrDefault(); secs < 1 || secs > maxSecs {
 		return fmt.Errorf("timeoutSeconds %d must be between 1 and %d", secs, maxSecs)
@@ -85,7 +85,7 @@ func checkTimeouts(req httpapi.SendRequestInput) error {
 
 // setQuery adds req's query parameters to u's, and its API key if it goes in the query. It returns
 // the API key if it goes in the Authorization header instead.
-func setQuery(u *url.URL, env settings.Env, req httpapi.SendRequestInput) (headerKey string, err error) {
+func setQuery(u *url.URL, env settings.Env, req httpapi.RequestInput) (headerKey string, err error) {
 	q := u.Query()
 	if req.QueryParams != nil {
 		for k, v := range req.QueryParams.AdditionalProperties {
@@ -122,7 +122,7 @@ func setQuery(u *url.URL, env settings.Env, req httpapi.SendRequestInput) (heade
 // secretHeaderVars) is sent with that variable's value instead. headerKey (the API key, if it
 // doesn't go in the query) then replaces any Authorization header: the basic auth password with a
 // username, else a Bearer token.
-func setHeaders(httpReq *http.Request, env settings.Env, req httpapi.SendRequestInput, headerKey string) error {
+func setHeaders(httpReq *http.Request, env settings.Env, req httpapi.RequestInput, headerKey string) error {
 	if req.Headers != nil {
 		// Names that differ only in case are one header, and only one value could be sent, chosen
 		// at random. Refuse them, so the header that is sent is the one checked (see
@@ -208,7 +208,7 @@ func secretEnv(env settings.Env, envVar string) (string, error) {
 // canonical name, to the variable on the Connector that value names. The Connector sends
 // the variable's value as the header instead, so the secret stays out of the request and its
 // history, and drops the header on a redirect that leaves the original site (see checkRedirect).
-func secretHeaderVars(req httpapi.SendRequestInput) map[string]string {
+func secretHeaderVars(req httpapi.RequestInput) map[string]string {
 	if req.Headers == nil {
 		return nil
 	}
@@ -226,7 +226,7 @@ func secretHeaderVars(req httpapi.SendRequestInput) map[string]string {
 
 // authorizationEnvVar is the variable named by req's Authorization header, or "" if the header
 // isn't a variable name (see secretHeaderVars).
-func authorizationEnvVar(req httpapi.SendRequestInput) string {
+func authorizationEnvVar(req httpapi.RequestInput) string {
 	return secretHeaderVars(req)["Authorization"]
 }
 
@@ -234,7 +234,7 @@ func authorizationEnvVar(req httpapi.SendRequestInput) string {
 // username, the encoded basic auth credentials it is part of), and each variable a header names
 // along with that value's credentials without the scheme (the "abc" of "Bearer abc"), which an
 // endpoint can echo alone.
-func secrets(env settings.Env, req httpapi.SendRequestInput) []string {
+func secrets(env settings.Env, req httpapi.RequestInput) []string {
 	var values []string
 	if envVar := value(req.APIKeyEnvVar); strings.HasPrefix(envVar, SecretEnvPrefix) {
 		if v, _ := secretsFamily.Lookup(env, envVar); v != "" {
@@ -256,7 +256,7 @@ func secrets(env settings.Env, req httpapi.SendRequestInput) []string {
 }
 
 // timeout is the per-attempt timeout for req, which build has checked.
-func timeout(req httpapi.SendRequestInput) time.Duration {
+func timeout(req httpapi.RequestInput) time.Duration {
 	return time.Duration(req.TimeoutSecondsOrDefault()) * time.Second
 }
 
@@ -271,7 +271,7 @@ func value(p *string) string {
 // RateLimitKey identifies a rate-limit bucket: the URL plus who is calling. The caller is the
 // basic auth username, else the API key's environment variable name, else the Authorization
 // header's environment variable name (never either value), else "anon".
-func RateLimitKey(req httpapi.SendRequestInput) string {
+func RateLimitKey(req httpapi.RequestInput) string {
 	identity := value(req.Username)
 	if identity == "" {
 		identity = value(req.APIKeyEnvVar)

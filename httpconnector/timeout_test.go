@@ -13,11 +13,11 @@ import (
 func TestScheduleToClose(t *testing.T) {
 	a := newWithWindow(testWindow)
 	a.maxTotal = 2 * time.Hour
-	defaultAttempt := httpapi.SendRequestInput{URL: "https://x.test"} // timeoutSeconds 30
-	oneSecond := httpapi.SendRequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(1))}
+	defaultAttempt := httpapi.RequestInput{URL: "https://x.test"} // timeoutSeconds 30
+	oneSecond := httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(1))}
 	for _, tc := range []struct {
 		name    string
-		req     httpapi.SendRequestInput
+		req     httpapi.RequestInput
 		header  string
 		want    time.Duration
 		wantErr string // empty: accepted

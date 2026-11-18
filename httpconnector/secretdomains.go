@@ -72,14 +72,14 @@ func readSecretDomains(environ []string) (map[string][]string, error) {
 // CheckSecretDomains reports an error if req names a secret variable, as apiKeyEnvVar or as a
 // header's whole value, that may not be sent to req's host: the host must be one of the domains in
 // the variable's SecretDomainsSuffix list or a subdomain of one, matched as for
-// AllowedDomainsEnvVar. The sendRequest operation calls it before starting the activity, and
-// SendRequest before sending. The error names variables and the host, never a value.
+// AllowedDomainsEnvVar. The request operation calls it before starting the activity, and
+// Request before sending. The error names variables and the host, never a value.
 //
 // Redirects need no check of their own. A redirect is sent a secret only while it stays on the
 // original host or its subdomains, all of which are in the list since the original host is: the
 // Connector drops secret headers once a redirect leaves (see checkRedirect), http.Client drops the
 // Authorization header an apiKeyEnvVar key goes in, and a key in the query isn't carried over.
-func (a *HTTPActivities) CheckSecretDomains(req httpapi.SendRequestInput) error {
+func (a *HTTPActivities) CheckSecretDomains(req httpapi.RequestInput) error {
 	vars := requestSecretVars(req)
 	if len(vars) == 0 {
 		return nil
@@ -126,7 +126,7 @@ func (a *HTTPActivities) CheckSecretsAllowed() error {
 
 // requestSecretVars are the secret variables req names, sorted: its apiKeyEnvVar, and each
 // variable a header's whole value names (see secretHeaderVars).
-func requestSecretVars(req httpapi.SendRequestInput) []string {
+func requestSecretVars(req httpapi.RequestInput) []string {
 	set := make(map[string]bool)
 	if v := value(req.APIKeyEnvVar); strings.HasPrefix(v, SecretEnvPrefix) {
 		set[v] = true

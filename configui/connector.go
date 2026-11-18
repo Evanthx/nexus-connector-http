@@ -45,7 +45,7 @@ var programs = []program{{
 
 // checkConnector builds the Connector from env as the Connector does, then reports what it allows,
 // any secret domain the allowlist doesn't allow, and, if fields has a url, the result of one GET
-// sent through the Connector's SendRequest activity.
+// sent through the Connector's Request activity.
 func checkConnector(_ context.Context, env settings.Env, fields map[string]string) check {
 	c := check{Title: "Connector"}
 	a, err := httpconnector.NewWithEnv(env)
@@ -61,7 +61,7 @@ func checkConnector(_ context.Context, env settings.Env, fields map[string]strin
 	if url == "" {
 		return c
 	}
-	req := httpapi.SendRequestInput{URL: url}
+	req := httpapi.RequestInput{URL: url}
 	label := "GET " + url
 	if name := fields["secret"]; name != "" {
 		envVar := httpconnector.SecretEnvPrefix + name
@@ -77,19 +77,19 @@ func checkConnector(_ context.Context, env settings.Env, fields map[string]strin
 	return c
 }
 
-// sendTest runs a's SendRequest activity once for req, outside any worker, in the SDK's test
+// sendTest runs a's Request activity once for req, outside any worker, in the SDK's test
 // activity environment: the activity needs an activity context, and only a worker or the test
 // environment makes one. The request goes out for real.
-func sendTest(a *httpconnector.HTTPActivities, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+func sendTest(a *httpconnector.HTTPActivities, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
 	var suite testsuite.WorkflowTestSuite
 	suite.SetLogger(log.NewStructuredLogger(slog.New(slog.DiscardHandler)))
 	env := suite.NewTestActivityEnvironment()
-	env.RegisterActivity(a.SendRequest)
-	val, err := env.ExecuteActivity(a.SendRequest, req)
+	env.RegisterActivity(a.Request)
+	val, err := env.ExecuteActivity(a.Request, req)
 	if err != nil {
-		return httpapi.SendRequestOutput{}, err
+		return httpapi.RequestOutput{}, err
 	}
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	err = val.Get(&out)
 	return out, err
 }
@@ -102,7 +102,7 @@ func describeError(err error) string {
 		return err.Error()
 	}
 	msg := ae.Type() + ": " + ae.Message()
-	var out httpapi.SendRequestOutput
+	var out httpapi.RequestOutput
 	if ae.HasDetails() && ae.Details(&out) == nil && out.Status != "" {
 		msg += " (" + out.Status + "; " + summary(out) + ")"
 	}
@@ -111,7 +111,7 @@ func describeError(err error) string {
 
 // summary is a response's headers in brief: its Content-Type, how many headers, and the body's
 // size. The body and other header values aren't shown.
-func summary(out httpapi.SendRequestOutput) string {
+func summary(out httpapi.RequestOutput) string {
 	h := http.Header(out.Headers.AdditionalProperties)
 	parts := []string{fmt.Sprintf("%d headers", len(h))}
 	if ct := h.Get("Content-Type"); ct != "" {

@@ -88,16 +88,16 @@ func TestCheckSecretDomains(t *testing.T) {
 		"HTTP_CONNECTOR_SECRET_LAN":    {"127.0.0.1"},
 		"HTTP_CONNECTOR_SECRET_ANY":    nil,
 	}
-	key := func(url, envVar string) httpapi.SendRequestInput {
-		return httpapi.SendRequestInput{URL: url, APIKeyEnvVar: &envVar}
+	key := func(url, envVar string) httpapi.RequestInput {
+		return httpapi.RequestInput{URL: url, APIKeyEnvVar: &envVar}
 	}
-	header := func(url, envVar string) httpapi.SendRequestInput {
-		return httpapi.SendRequestInput{URL: url, Headers: &httpapi.SendRequestInputHeaders{
+	header := func(url, envVar string) httpapi.RequestInput {
+		return httpapi.RequestInput{URL: url, Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"X-Api-Key": envVar},
 		}}
 	}
 
-	for _, ok := range []httpapi.SendRequestInput{
+	for _, ok := range []httpapi.RequestInput{
 		{URL: "https://anything.example/"}, // no secret
 		key("https://api.stripe.com/v1/charges", "HTTP_CONNECTOR_SECRET_STRIPE"),
 		key("https://API.Stripe.COM.:443/v1", "HTTP_CONNECTOR_SECRET_STRIPE"),
@@ -111,7 +111,7 @@ func TestCheckSecretDomains(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		req  httpapi.SendRequestInput
+		req  httpapi.RequestInput
 		host string
 	}{
 		{key("https://stripe.com/", "HTTP_CONNECTOR_SECRET_STRIPE"), "stripe.com"}, // a parent isn't in the list
@@ -137,7 +137,7 @@ func TestCheckSecretDomains(t *testing.T) {
 
 	// Both a key and a header are checked, and each one not allowed is named.
 	req := key("https://api.stripe.com/", "HTTP_CONNECTOR_SECRET_STRIPE")
-	req.Headers = &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{
+	req.Headers = &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{
 		"X-Goog-Api-Key": "HTTP_CONNECTOR_SECRET_GOOGLE",
 		"X-Lan":          "HTTP_CONNECTOR_SECRET_LAN",
 	}}
@@ -150,9 +150,9 @@ func TestCheckSecretDomains(t *testing.T) {
 // A list's variable can't be sent as a secret, as apiKeyEnvVar or as a header's value.
 func TestValidate_ListIsNotASecret(t *testing.T) {
 	t.Setenv("HTTP_CONNECTOR_SECRET_STRIPE_DOMAINS", "api.stripe.com")
-	for _, req := range []httpapi.SendRequestInput{
+	for _, req := range []httpapi.RequestInput{
 		{URL: "https://api.stripe.com/", APIKeyEnvVar: new("HTTP_CONNECTOR_SECRET_STRIPE_DOMAINS")},
-		{URL: "https://api.stripe.com/", Headers: &httpapi.SendRequestInputHeaders{
+		{URL: "https://api.stripe.com/", Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"X-Api-Key": "HTTP_CONNECTOR_SECRET_STRIPE_DOMAINS"},
 		}},
 	} {
@@ -160,14 +160,14 @@ func TestValidate_ListIsNotASecret(t *testing.T) {
 	}
 }
 
-// SendRequest itself refuses a secret its host may not be sent, without sending anything, as a
+// Request itself refuses a secret its host may not be sent, without sending anything, as a
 // non-retryable InvalidRequest: the path a library caller such as nexus-connector-openapi takes.
-func TestSendRequest_SecretNotSentToOtherHost(t *testing.T) {
+func TestRequest_SecretNotSentToOtherHost(t *testing.T) {
 	t.Setenv(testSecretVar, "s3cr3t")
 	srv, hits := countingServer(t, http.StatusOK, "ok")
 	a := newWithWindow(testWindow)
 	a.secretDomains[testSecretVar] = []string{"api.example.com"}
-	_, err := runSendRequest(t, a, httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
+	_, err := runRequest(t, a, httpapi.RequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeInvalidRequest, ae.Type())
 	require.True(t, ae.NonRetryable())
@@ -176,7 +176,7 @@ func TestSendRequest_SecretNotSentToOtherHost(t *testing.T) {
 	require.Zero(t, hits.Load(), "nothing sent")
 
 	a.secretDomains[testSecretVar] = []string{"127.0.0.1"}
-	_, err = runSendRequest(t, a, httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
+	_, err = runRequest(t, a, httpapi.RequestInput{URL: srv.URL, APIKeyEnvVar: new(testSecretVar)})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, hits.Load())
 }
@@ -184,7 +184,7 @@ func TestSendRequest_SecretNotSentToOtherHost(t *testing.T) {
 // Header names that differ only in case are one header. A request with two is refused before
 // anything is sent: otherwise the check could pass one secret while the other, chosen at random,
 // is sent and left unredacted.
-func TestSendRequest_HeaderNamesDifferingInCaseRefused(t *testing.T) {
+func TestRequest_HeaderNamesDifferingInCaseRefused(t *testing.T) {
 	t.Setenv(SecretEnvPrefix+"PERMISSIVE", "permissive_value")
 	t.Setenv(SecretEnvPrefix+"RESTRICTED", "restricted_value")
 	srv, hits := countingServer(t, http.StatusOK, "ok")
@@ -193,7 +193,7 @@ func TestSendRequest_HeaderNamesDifferingInCaseRefused(t *testing.T) {
 		SecretEnvPrefix + "PERMISSIVE": nil,
 		SecretEnvPrefix + "RESTRICTED": {"api.stripe.com"},
 	}
-	req := httpapi.SendRequestInput{URL: srv.URL, Headers: &httpapi.SendRequestInputHeaders{
+	req := httpapi.RequestInput{URL: srv.URL, Headers: &httpapi.RequestInputHeaders{
 		AdditionalProperties: map[string]string{
 			"X-Api-Key": SecretEnvPrefix + "PERMISSIVE",
 			"x-api-key": SecretEnvPrefix + "RESTRICTED",
@@ -202,7 +202,7 @@ func TestSendRequest_HeaderNamesDifferingInCaseRefused(t *testing.T) {
 	require.ErrorContains(t, Validate(req), `headers "X-Api-Key" and "x-api-key" are the same header`)
 	// Map order is random, so try enough times that each order comes up.
 	for range 50 {
-		_, err := runSendRequest(t, a, req)
+		_, err := runRequest(t, a, req)
 		require.Equal(t, ErrorTypeInvalidRequest, appErr(t, err).Type())
 	}
 	require.Zero(t, hits.Load(), "nothing sent")

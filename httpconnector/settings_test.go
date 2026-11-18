@@ -31,7 +31,7 @@ func TestNewWithEnv_ReadsOnlyItsEnv(t *testing.T) {
 	require.True(t, a.allowRedirects)
 	require.Equal(t, map[string][]string{SecretEnvPrefix + "PAGE": {"api.example.com"}}, a.secretDomains)
 
-	req := httpapi.SendRequestInput{URL: "https://api.example.com", APIKeyEnvVar: new(SecretEnvPrefix + "PAGE")}
+	req := httpapi.RequestInput{URL: "https://api.example.com", APIKeyEnvVar: new(SecretEnvPrefix + "PAGE")}
 	httpReq, err := build(t.Context(), a.env, req)
 	require.NoError(t, err)
 	require.Equal(t, "Bearer from_the_env", httpReq.Header.Get("Authorization"))

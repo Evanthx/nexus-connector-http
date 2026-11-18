@@ -8,19 +8,19 @@ Every failure is a `temporal.ApplicationError` whose `Type()` is one of these co
 |---|---|---|
 | `InvalidRequest` | The request cannot be made: a bad URL, `timeoutSeconds` outside 1–60, the caller's operation timeout too short for one attempt plus 10 seconds, a header name or value that is not valid HTTP, two header names that differ only in case (such as `X-Api-Key` and `x-api-key`, which are one header), a bad or missing API key variable, a host not in the allowed domains list, or a secret whose `_DOMAINS` list doesn't include the host. The request is never sent. Surfaces as a `BAD_REQUEST` handler error with this error as its cause; no activity is created. | No |
 | `ClientError` | The endpoint answered with a status that resending the same request will not change: any 4xx not listed below, 501, 505, 511, or a 3xx that was not followed (any redirect unless `HTTP_CONNECTOR_ALLOW_REDIRECTS` is true, a 304, a redirect from `https` to `http`, or a redirect to a host not in the allowed domains list). Also: a response body over 2 MiB, or a TLS certificate that does not verify (expired, wrong host, or unknown authority). | No |
-| `Transient` | The endpoint answered 408, 409, 420, 421, 423, 424, 425, or any 5xx except 501, 505, and 511; or the request timed out or failed on the network. | With backoff: 1 s, doubling up to 30 s. |
-| `RateLimited` | The endpoint answered 429, or another request with the same rate-limit key already hit 429 within the current window. The request may not have been sent if the window was still open. | Once per rate-limit window. |
+| `Transient` | The endpoint answered 408, 409, 420, 421, 423, 424, 425, or any 5xx except 501, 505, and 511; or the request timed out or failed on the network. | With backoff: 5 s, then three times longer each time, at most 5 minutes apart (5 s, 15 s, 45 s, 2 min 15 s, then every 5 min). |
+| `RateLimited` | The endpoint answered 429, or another request with the same rate-limit key already hit 429 within the current window. The request may not have been sent if the window was still open. | Once per rate-limit window, or sooner if the 429's `Retry-After` asks for less. |
 
 Retries stop shortly before the caller's operation times out (see [Timeouts](#timeouts)). The caller then receives the last failure. `InvalidRequest` is detected when the operation starts, before any activity is created.
 
 ### Reading error details in Go
 
-For errors that come from an HTTP response, the error's details hold a `SendRequestOutput` with the status code, headers, and body:
+For errors that come from an HTTP response, the error's details hold a `RequestOutput` with the status code, headers, and body:
 
 ```go
 var appErr *temporal.ApplicationError
 if errors.As(err, &appErr) && appErr.Type() == httpconnector.ErrorTypeClientError {
-    var resp httpapi.SendRequestOutput
+    var resp httpapi.RequestOutput
     _ = appErr.Details(&resp)
     // resp.StatusCode, resp.Body, resp.Headers ...
 }
@@ -53,8 +53,8 @@ Cancelling a caller workflow cancels the Connector activity. Any attempt already
 
 The Connector keeps an in-memory cache of rate-limited keys. The key for a request is its URL plus the identity of the caller: the basic auth username, else the API key variable name, else the `Authorization` header's variable name, else `anon`.
 
-- When an endpoint answers **429**, the key is cached for the rate-limit window and the request fails with `RateLimited`.
-- While a key is cached, every request with the same key fails with `RateLimited` **without being sent**, and retries when the window ends.
+- When an endpoint answers **429**, the key is cached for the rate-limit window and the request fails with `RateLimited`. If the 429 has a `Retry-After` header (seconds or an HTTP date) asking for less time than the window, the key is cached for that long instead. A longer, zero, past or unreadable `Retry-After` is ignored.
+- While a key is cached, every request with the same key fails with `RateLimited` **without being sent**, and retries when the key expires.
 - A **2xx** response clears the key.
 
 The window is `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` on the Connector (a whole number of minutes, at least 1, default 5).

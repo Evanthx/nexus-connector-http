@@ -13,42 +13,42 @@ import (
 var HTTPService = struct {
 	ServiceName string
 	// Make one HTTP request, with retries, and return the response.
-	SendRequest nexus.OperationReference[SendRequestInput, SendRequestOutput]
+	Request nexus.OperationReference[RequestInput, RequestOutput]
 }{
 	ServiceName: "HTTPService",
-	SendRequest: nexus.NewOperationReference[SendRequestInput, SendRequestOutput]("sendRequest"),
+	Request:     nexus.NewOperationReference[RequestInput, RequestOutput]("request"),
 }
 
-// SendRequestInputMethod HTTP method
-type SendRequestInputMethod string
+// RequestInputMethod HTTP method
+type RequestInputMethod string
 
 const (
-	// SendRequestInputMethodGet is the SendRequestInputMethod value "GET".
-	SendRequestInputMethodGet SendRequestInputMethod = "GET"
-	// SendRequestInputMethodHead is the SendRequestInputMethod value "HEAD".
-	SendRequestInputMethodHead SendRequestInputMethod = "HEAD"
-	// SendRequestInputMethodPost is the SendRequestInputMethod value "POST".
-	SendRequestInputMethodPost SendRequestInputMethod = "POST"
-	// SendRequestInputMethodPut is the SendRequestInputMethod value "PUT".
-	SendRequestInputMethodPut SendRequestInputMethod = "PUT"
-	// SendRequestInputMethodPatch is the SendRequestInputMethod value "PATCH".
-	SendRequestInputMethodPatch SendRequestInputMethod = "PATCH"
-	// SendRequestInputMethodDelete is the SendRequestInputMethod value "DELETE".
-	SendRequestInputMethodDelete SendRequestInputMethod = "DELETE"
-	// SendRequestInputMethodOptions is the SendRequestInputMethod value "OPTIONS".
-	SendRequestInputMethodOptions SendRequestInputMethod = "OPTIONS"
+	// RequestInputMethodGet is the RequestInputMethod value "GET".
+	RequestInputMethodGet RequestInputMethod = "GET"
+	// RequestInputMethodHead is the RequestInputMethod value "HEAD".
+	RequestInputMethodHead RequestInputMethod = "HEAD"
+	// RequestInputMethodPost is the RequestInputMethod value "POST".
+	RequestInputMethodPost RequestInputMethod = "POST"
+	// RequestInputMethodPut is the RequestInputMethod value "PUT".
+	RequestInputMethodPut RequestInputMethod = "PUT"
+	// RequestInputMethodPatch is the RequestInputMethod value "PATCH".
+	RequestInputMethodPatch RequestInputMethod = "PATCH"
+	// RequestInputMethodDelete is the RequestInputMethod value "DELETE".
+	RequestInputMethodDelete RequestInputMethod = "DELETE"
+	// RequestInputMethodOptions is the RequestInputMethod value "OPTIONS".
+	RequestInputMethodOptions RequestInputMethod = "OPTIONS"
 )
 
-// SendRequestInput is generated from the corresponding JSON Schema definition.
-type SendRequestInput struct {
+// RequestInput is generated from the corresponding JSON Schema definition.
+type RequestInput struct {
 	// URL Absolute http or https URL
 	URL string `json:"url"`
 	// Method HTTP method
-	Method *SendRequestInputMethod `json:"method,omitempty"`
+	Method *RequestInputMethod `json:"method,omitempty"`
 	// Headers corresponds to the "headers" JSON property.
-	Headers *SendRequestInputHeaders `json:"headers,omitempty"`
+	Headers *RequestInputHeaders `json:"headers,omitempty"`
 	// QueryParams corresponds to the "queryParams" JSON property.
-	QueryParams *SendRequestInputQueryParams `json:"queryParams,omitempty"`
+	QueryParams *RequestInputQueryParams `json:"queryParams,omitempty"`
 	// Username Basic auth username. The password is the API key from apiKeyEnvVar, which
 	// this needs; apiKeyParam must be unset
 	Username *string `json:"username,omitempty"`
@@ -67,15 +67,15 @@ type SendRequestInput struct {
 }
 
 // MethodOrDefault returns Method when set, else the schema default.
-func (m SendRequestInput) MethodOrDefault() SendRequestInputMethod {
+func (m RequestInput) MethodOrDefault() RequestInputMethod {
 	if m.Method != nil {
 		return *m.Method
 	}
-	return SendRequestInputMethodGet
+	return RequestInputMethodGet
 }
 
 // TimeoutSecondsOrDefault returns TimeoutSeconds when set, else the schema default.
-func (m SendRequestInput) TimeoutSecondsOrDefault() int64 {
+func (m RequestInput) TimeoutSecondsOrDefault() int64 {
 	if m.TimeoutSeconds != nil {
 		return *m.TimeoutSeconds
 	}
@@ -84,11 +84,11 @@ func (m SendRequestInput) TimeoutSecondsOrDefault() int64 {
 
 // Validate checks m against every constraint and returns a PayloadValidationError
 // listing any violations.
-func (m SendRequestInput) Validate() error {
+func (m RequestInput) Validate() error {
 	var errs []Violation
 	if m.Method != nil {
 		switch *m.Method {
-		case SendRequestInputMethodGet, SendRequestInputMethodHead, SendRequestInputMethodPost, SendRequestInputMethodPut, SendRequestInputMethodPatch, SendRequestInputMethodDelete, SendRequestInputMethodOptions:
+		case RequestInputMethodGet, RequestInputMethodHead, RequestInputMethodPost, RequestInputMethodPut, RequestInputMethodPatch, RequestInputMethodDelete, RequestInputMethodOptions:
 		default:
 			errs = append(errs, Violation{"method", fmt.Sprintf("must be one of [\"GET\",\"HEAD\",\"POST\",\"PUT\",\"PATCH\",\"DELETE\",\"OPTIONS\"], got %q", (*m.Method))})
 		}
@@ -110,7 +110,7 @@ func (m SendRequestInput) Validate() error {
 
 // UnmarshalJSON parses data into m and validates it, returning a
 // PayloadValidationError listing any violations.
-func (m *SendRequestInput) UnmarshalJSON(data []byte) error {
+func (m *RequestInput) UnmarshalJSON(data []byte) error {
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(data, &all); err != nil {
 		return err
@@ -134,9 +134,9 @@ func (m *SendRequestInput) UnmarshalJSON(data []byte) error {
 		m.URL = v
 	}
 	if v, ok := parseStringField(get("method"), "method", false, false, &errs); ok {
-		typed := SendRequestInputMethod(v)
+		typed := RequestInputMethod(v)
 		switch typed {
-		case SendRequestInputMethodGet, SendRequestInputMethodHead, SendRequestInputMethodPost, SendRequestInputMethodPut, SendRequestInputMethodPatch, SendRequestInputMethodDelete, SendRequestInputMethodOptions:
+		case RequestInputMethodGet, RequestInputMethodHead, RequestInputMethodPost, RequestInputMethodPut, RequestInputMethodPatch, RequestInputMethodDelete, RequestInputMethodOptions:
 			m.Method = &typed
 		default:
 			errs = append(errs, Violation{"method", fmt.Sprintf("must be one of [\"GET\",\"HEAD\",\"POST\",\"PUT\",\"PATCH\",\"DELETE\",\"OPTIONS\"], got %q", typed)})
@@ -146,7 +146,7 @@ func (m *SendRequestInput) UnmarshalJSON(data []byte) error {
 	} else if isNull(*raw) {
 		errs = append(errs, Violation{"headers", "explicit null not allowed"})
 	} else {
-		var tmp SendRequestInputHeaders
+		var tmp RequestInputHeaders
 		if err := json.Unmarshal(*raw, &tmp); err != nil {
 			mergeNested(&errs, "headers", err)
 		} else {
@@ -157,7 +157,7 @@ func (m *SendRequestInput) UnmarshalJSON(data []byte) error {
 	} else if isNull(*raw) {
 		errs = append(errs, Violation{"queryParams", "explicit null not allowed"})
 	} else {
-		var tmp SendRequestInputQueryParams
+		var tmp RequestInputQueryParams
 		if err := json.Unmarshal(*raw, &tmp); err != nil {
 			mergeNested(&errs, "queryParams", err)
 		} else {
@@ -187,7 +187,7 @@ func (m *SendRequestInput) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON validates m, then serializes it to JSON, returning a
 // PayloadValidationError if validation fails.
-func (m SendRequestInput) MarshalJSON() ([]byte, error) {
+func (m RequestInput) MarshalJSON() ([]byte, error) {
 	var errs []Violation
 	addViolations(&errs, m.Validate())
 	out := map[string]json.RawMessage{}
@@ -222,17 +222,16 @@ func (m SendRequestInput) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// SendRequestInputHeaders Request headers. A value that starts with
-// HTTP_CONNECTOR_SECRET_ names an environment variable on the Connector, whose value is
-// sent instead
-type SendRequestInputHeaders struct {
+// RequestInputHeaders Request headers. A value that starts with HTTP_CONNECTOR_SECRET_
+// names an environment variable on the Connector, whose value is sent instead
+type RequestInputHeaders struct {
 	// AdditionalProperties holds every member of this map-shaped object.
 	AdditionalProperties map[string]string
 }
 
 // Validate checks m against every constraint and returns a PayloadValidationError
 // listing any violations.
-func (m SendRequestInputHeaders) Validate() error {
+func (m RequestInputHeaders) Validate() error {
 	var errs []Violation
 	if len(errs) > 0 {
 		return newPayloadValidationError(errs)
@@ -242,7 +241,7 @@ func (m SendRequestInputHeaders) Validate() error {
 
 // UnmarshalJSON parses data into m and validates it, returning a
 // PayloadValidationError listing any violations.
-func (m *SendRequestInputHeaders) UnmarshalJSON(data []byte) error {
+func (m *RequestInputHeaders) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -263,7 +262,7 @@ func (m *SendRequestInputHeaders) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON validates m, then serializes it to JSON, returning a
 // PayloadValidationError if validation fails.
-func (m SendRequestInputHeaders) MarshalJSON() ([]byte, error) {
+func (m RequestInputHeaders) MarshalJSON() ([]byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
@@ -274,15 +273,15 @@ func (m SendRequestInputHeaders) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// SendRequestInputQueryParams Query parameters, added to any already in the URL
-type SendRequestInputQueryParams struct {
+// RequestInputQueryParams Query parameters, added to any already in the URL
+type RequestInputQueryParams struct {
 	// AdditionalProperties holds every member of this map-shaped object.
 	AdditionalProperties map[string]string
 }
 
 // Validate checks m against every constraint and returns a PayloadValidationError
 // listing any violations.
-func (m SendRequestInputQueryParams) Validate() error {
+func (m RequestInputQueryParams) Validate() error {
 	var errs []Violation
 	if len(errs) > 0 {
 		return newPayloadValidationError(errs)
@@ -292,7 +291,7 @@ func (m SendRequestInputQueryParams) Validate() error {
 
 // UnmarshalJSON parses data into m and validates it, returning a
 // PayloadValidationError listing any violations.
-func (m *SendRequestInputQueryParams) UnmarshalJSON(data []byte) error {
+func (m *RequestInputQueryParams) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -313,7 +312,7 @@ func (m *SendRequestInputQueryParams) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON validates m, then serializes it to JSON, returning a
 // PayloadValidationError if validation fails.
-func (m SendRequestInputQueryParams) MarshalJSON() ([]byte, error) {
+func (m RequestInputQueryParams) MarshalJSON() ([]byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
@@ -324,14 +323,14 @@ func (m SendRequestInputQueryParams) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// SendRequestOutput is generated from the corresponding JSON Schema definition.
-type SendRequestOutput struct {
+// RequestOutput is generated from the corresponding JSON Schema definition.
+type RequestOutput struct {
 	// StatusCode corresponds to the "statusCode" JSON property.
 	StatusCode int64 `json:"statusCode"`
 	// Status line, such as 200 OK
 	Status string `json:"status"`
 	// Headers corresponds to the "headers" JSON property.
-	Headers SendRequestOutputHeaders `json:"headers"`
+	Headers RequestOutputHeaders `json:"headers"`
 	// Body corresponds to the "body" JSON property.
 	Body string `json:"body"`
 	// DurationMillis How long the HTTP call took
@@ -342,7 +341,7 @@ type SendRequestOutput struct {
 
 // Validate checks m against every constraint and returns a PayloadValidationError
 // listing any violations.
-func (m SendRequestOutput) Validate() error {
+func (m RequestOutput) Validate() error {
 	var errs []Violation
 	if m.StatusCode < -integerCap || m.StatusCode > integerCap {
 		errs = append(errs, Violation{"statusCode", "exceeds ±(2^53-1) integer cap"})
@@ -374,7 +373,7 @@ func (m SendRequestOutput) Validate() error {
 
 // UnmarshalJSON parses data into m and validates it, returning a
 // PayloadValidationError listing any violations.
-func (m *SendRequestOutput) UnmarshalJSON(data []byte) error {
+func (m *RequestOutput) UnmarshalJSON(data []byte) error {
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(data, &all); err != nil {
 		return err
@@ -422,7 +421,7 @@ func (m *SendRequestOutput) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON validates m, then serializes it to JSON, returning a
 // PayloadValidationError if validation fails.
-func (m SendRequestOutput) MarshalJSON() ([]byte, error) {
+func (m RequestOutput) MarshalJSON() ([]byte, error) {
 	var errs []Violation
 	addViolations(&errs, m.Validate())
 	out := map[string]json.RawMessage{}
@@ -440,15 +439,15 @@ func (m SendRequestOutput) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// SendRequestOutputHeaders is generated from the corresponding JSON Schema definition.
-type SendRequestOutputHeaders struct {
+// RequestOutputHeaders is generated from the corresponding JSON Schema definition.
+type RequestOutputHeaders struct {
 	// AdditionalProperties holds every member of this map-shaped object.
 	AdditionalProperties map[string][]string
 }
 
 // Validate checks m against every constraint and returns a PayloadValidationError
 // listing any violations.
-func (m SendRequestOutputHeaders) Validate() error {
+func (m RequestOutputHeaders) Validate() error {
 	var errs []Violation
 	if len(errs) > 0 {
 		return newPayloadValidationError(errs)
@@ -458,7 +457,7 @@ func (m SendRequestOutputHeaders) Validate() error {
 
 // UnmarshalJSON parses data into m and validates it, returning a
 // PayloadValidationError listing any violations.
-func (m *SendRequestOutputHeaders) UnmarshalJSON(data []byte) error {
+func (m *RequestOutputHeaders) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -498,7 +497,7 @@ func (m *SendRequestOutputHeaders) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON validates m, then serializes it to JSON, returning a
 // PayloadValidationError if validation fails.
-func (m SendRequestOutputHeaders) MarshalJSON() ([]byte, error) {
+func (m RequestOutputHeaders) MarshalJSON() ([]byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}

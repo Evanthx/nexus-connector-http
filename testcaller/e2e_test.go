@@ -85,15 +85,15 @@ func TestEndToEnd(t *testing.T) {
 	t.Cleanup(callerWorker.Stop)
 
 	// callWithTimeout runs CallerWorkflow with a Nexus operation timeout; call, with none.
-	callWithTimeout := func(t *testing.T, req httpapi.SendRequestInput, timeout time.Duration) (httpapi.SendRequestOutput, error) {
+	callWithTimeout := func(t *testing.T, req httpapi.RequestInput, timeout time.Duration) (httpapi.RequestOutput, error) {
 		t.Helper()
 		run, err := callerClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: testcaller.TaskQueue}, testcaller.CallerWorkflow, req, timeout)
 		require.NoError(t, err)
-		var resp httpapi.SendRequestOutput
+		var resp httpapi.RequestOutput
 		err = run.Get(ctx, &resp)
 		return resp, err
 	}
-	call := func(t *testing.T, req httpapi.SendRequestInput) (httpapi.SendRequestOutput, error) {
+	call := func(t *testing.T, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
 		t.Helper()
 		return callWithTimeout(t, req, 0)
 	}
@@ -104,36 +104,18 @@ func TestEndToEnd(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		resp, err := call(t, httpapi.SendRequestInput{
+		resp, err := call(t, httpapi.RequestInput{
 			URL:         srv.URL,
-			QueryParams: &httpapi.SendRequestInputQueryParams{AdditionalProperties: map[string]string{"q": "one"}},
-			Headers:     &httpapi.SendRequestInputHeaders{AdditionalProperties: map[string]string{"X-H": "two"}},
+			QueryParams: &httpapi.RequestInputQueryParams{AdditionalProperties: map[string]string{"q": "one"}},
+			Headers:     &httpapi.RequestInputHeaders{AdditionalProperties: map[string]string{"X-H": "two"}},
 		})
 		require.NoError(t, err)
 		require.Equal(t, int64(200), resp.StatusCode)
 		require.Equal(t, "echo one two", resp.Body)
 	})
 
-	t.Run("transient failure is retried", func(t *testing.T) {
-		var hits atomic.Int32
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if hits.Add(1) == 1 {
-				w.WriteHeader(http.StatusServiceUnavailable)
-				return
-			}
-			_, _ = io.WriteString(w, "second time")
-		}))
-		defer srv.Close()
-
-		resp, err := call(t, httpapi.SendRequestInput{URL: srv.URL})
-		require.NoError(t, err)
-		require.Equal(t, "second time", resp.Body)
-		require.Equal(t, int32(2), hits.Load())
-	})
-
-	// Each attempt passes its count of Transient failures in a row to the next as heartbeat
-	// details, which only the server carries between attempts.
-	t.Run("transient failures in a row back off 1s, 2s, 4s", func(t *testing.T) {
+	// The server waits the retry policy's 5s before the second attempt.
+	t.Run("transient failure is retried after 5s", func(t *testing.T) {
 		var mu sync.Mutex
 		var times []time.Time
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,38 +123,43 @@ func TestEndToEnd(t *testing.T) {
 			times = append(times, time.Now())
 			n := len(times)
 			mu.Unlock()
-			if n <= 3 {
+			if n == 1 {
 				w.WriteHeader(http.StatusServiceUnavailable)
+				return
 			}
+			_, _ = io.WriteString(w, "second time")
 		}))
 		defer srv.Close()
 
-		_, err := call(t, httpapi.SendRequestInput{URL: srv.URL})
+		resp, err := call(t, httpapi.RequestInput{URL: srv.URL})
 		require.NoError(t, err)
+		require.Equal(t, "second time", resp.Body)
 		mu.Lock()
 		defer mu.Unlock()
-		require.Len(t, times, 4)
-		for i, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
-			require.InDelta(t, want, times[i+1].Sub(times[i]), float64(500*time.Millisecond), "wait before attempt %d", i+2)
-		}
+		require.Len(t, times, 2)
+		require.InDelta(t, 5*time.Second, times[1].Sub(times[0]), float64(time.Second))
 	})
 
 	t.Run("retries stop before the caller's timeout, with the Connector's error", func(t *testing.T) {
+		var hits atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
 		defer srv.Close()
 
-		// The Connector retries for 15s - 10s margin = 5s, then fails with the last 503. Had it
-		// kept retrying, the caller would time out at 15s with no ApplicationError.
-		const timeout = 15 * time.Second
+		// The Connector retries for 25s - 10s margin = 15s: attempts at 0s and 5s, then the next
+		// 15s wait doesn't fit, so it fails with the last 503. Had it kept retrying, the caller
+		// would time out at 25s with no ApplicationError.
+		const timeout = 25 * time.Second
 		start := time.Now()
-		_, err := callWithTimeout(t, httpapi.SendRequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))}, timeout)
+		_, err := callWithTimeout(t, httpapi.RequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))}, timeout)
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeTransient, appErr.Type())
 		require.Contains(t, appErr.Message(), "returned status 503")
 		require.Less(t, time.Since(start), timeout)
+		require.Equal(t, int32(2), hits.Load())
 	})
 
 	t.Run("client error reaches the caller with the response", func(t *testing.T) {
@@ -184,13 +171,13 @@ func TestEndToEnd(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		_, err := call(t, httpapi.SendRequestInput{URL: srv.URL})
+		_, err := call(t, httpapi.RequestInput{URL: srv.URL})
 		var opErr *temporal.NexusOperationError
 		require.ErrorAs(t, err, &opErr)
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeClientError, appErr.Type())
-		var resp httpapi.SendRequestOutput
+		var resp httpapi.RequestOutput
 		require.NoError(t, appErr.Details(&resp))
 		require.Equal(t, int64(404), resp.StatusCode)
 		require.Equal(t, "no such thing", resp.Body)
@@ -199,7 +186,7 @@ func TestEndToEnd(t *testing.T) {
 
 	t.Run("caller timeout too short for one attempt is rejected", func(t *testing.T) {
 		// timeoutSeconds defaults to 30, plus the 10s margin, is more than 20s.
-		_, err := callWithTimeout(t, httpapi.SendRequestInput{URL: "http://127.0.0.1:1/never"}, 20*time.Second)
+		_, err := callWithTimeout(t, httpapi.RequestInput{URL: "http://127.0.0.1:1/never"}, 20*time.Second)
 		var handlerErr *nexus.HandlerError
 		require.ErrorAs(t, err, &handlerErr)
 		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)
@@ -210,7 +197,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("invalid request fails when the operation starts", func(t *testing.T) {
-		_, err := call(t, httpapi.SendRequestInput{URL: "ftp://example.com/file"})
+		_, err := call(t, httpapi.RequestInput{URL: "ftp://example.com/file"})
 		var handlerErr *nexus.HandlerError
 		require.ErrorAs(t, err, &handlerErr)
 		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)
@@ -225,7 +212,7 @@ func TestEndToEnd(t *testing.T) {
 			_, _ = io.WriteString(w, r.Header.Get("Authorization"))
 		}))
 		defer srv.Close()
-		resp, err := call(t, httpapi.SendRequestInput{URL: srv.URL, APIKeyEnvVar: new(httpconnector.SecretEnvPrefix + "LOCAL")})
+		resp, err := call(t, httpapi.RequestInput{URL: srv.URL, APIKeyEnvVar: new(httpconnector.SecretEnvPrefix + "LOCAL")})
 		require.NoError(t, err)
 		// The server got the key; the Connector redacts it where the server echoes it back.
 		require.Equal(t, "Bearer [REDACTED]", resp.Body)
@@ -235,7 +222,7 @@ func TestEndToEnd(t *testing.T) {
 		var hits atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
 		defer srv.Close()
-		_, err := call(t, httpapi.SendRequestInput{URL: srv.URL, Headers: &httpapi.SendRequestInputHeaders{
+		_, err := call(t, httpapi.RequestInput{URL: srv.URL, Headers: &httpapi.RequestInputHeaders{
 			AdditionalProperties: map[string]string{"X-Api-Key": httpconnector.SecretEnvPrefix + "ELSEWHERE"},
 		}})
 		var handlerErr *nexus.HandlerError
@@ -250,7 +237,7 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("domain not allowed fails when the operation starts", func(t *testing.T) {
-		_, err := call(t, httpapi.SendRequestInput{URL: "https://example.com/file"})
+		_, err := call(t, httpapi.RequestInput{URL: "https://example.com/file"})
 		var handlerErr *nexus.HandlerError
 		require.ErrorAs(t, err, &handlerErr)
 		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)

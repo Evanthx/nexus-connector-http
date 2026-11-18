@@ -23,17 +23,17 @@ const (
 // last error. Zero means no timeout, so the Connector's maximum applies (25 hours by default). A
 // failed call is a NexusOperationError; errors.As finds the ApplicationError inside it, whose Type
 // is one of the httpconnector.ErrorType* values.
-func CallerWorkflow(ctx workflow.Context, req httpapi.SendRequestInput, timeout time.Duration) (httpapi.SendRequestOutput, error) {
+func CallerWorkflow(ctx workflow.Context, req httpapi.RequestInput, timeout time.Duration) (httpapi.RequestOutput, error) {
 	logger := workflow.GetLogger(ctx)
 	c := workflow.NewNexusClient(EndpointName, httpapi.HTTPService.ServiceName)
 
-	var resp httpapi.SendRequestOutput
-	err := c.ExecuteOperation(ctx, httpapi.HTTPService.SendRequest, req, workflow.NexusOperationOptions{
+	var resp httpapi.RequestOutput
+	err := c.ExecuteOperation(ctx, httpapi.HTTPService.Request, req, workflow.NexusOperationOptions{
 		ScheduleToCloseTimeout: timeout,
 	}).Get(ctx, &resp)
 	if err != nil {
 		logger.Error("HTTP request failed", "url", req.URL, "error", err)
-		return httpapi.SendRequestOutput{}, err
+		return httpapi.RequestOutput{}, err
 	}
 	logger.Info("HTTP response", "url", req.URL, "status", resp.StatusCode, "body", resp.Body)
 	return resp, nil
