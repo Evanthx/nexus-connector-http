@@ -25,7 +25,8 @@ var Settings = &settings.Program{
 		{Title: "Allowed hosts", Variables: []*settings.Variable{allowedDomainsSetting.Variable}},
 		{Title: "Secrets", Families: []*settings.Family{secretsFamily.Family}},
 		{Title: "Requests", Variables: []*settings.Variable{
-			allowRedirectsSetting.Variable, rateLimitSetting.Variable, maxDurationSetting.Variable,
+			allowRedirectsSetting.Variable, attemptTimeoutSetting.Variable, rateLimitSetting.Variable,
+			maxDurationSetting.Variable,
 		}},
 		settings.Temporal{
 			Namespace: defaultNamespace,
@@ -91,6 +92,14 @@ var allowRedirectsSetting = settings.Define(settings.Variable{
 		"Takes any value Go's `strconv.ParseBool` does.",
 	Docs: "See [Usage — redirects](usage.md#redirects).",
 }, parseAllowRedirects)
+
+var attemptTimeoutSetting = settings.Define(settings.Variable{
+	Name:    AttemptTimeoutEnvVar,
+	Default: "60",
+	Help: "How long one attempt may take, in whole seconds, at least 10. Each HTTP request times out 5 seconds " +
+		"sooner, so it fails with the Connector's own `Transient` error before the attempt times out. A caller's " +
+		"Nexus operation needs at least this plus 10 seconds.",
+}, parseAttemptTimeout)
 
 var rateLimitSetting = settings.Define(settings.Variable{
 	Name:    RateLimitMinutesEnvVar,
@@ -180,6 +189,19 @@ func parseAllowRedirects(v string) (bool, error) {
 
 // minutes reads the variable name's value as a whole number of minutes, at least 1, or def if it
 // is unset or empty.
+// parseAttemptTimeout reads AttemptTimeoutEnvVar: whole seconds, at least minAttemptTimeout.
+func parseAttemptTimeout(v string) (time.Duration, error) {
+	if v == "" {
+		return defaultAttemptTimeout, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || time.Duration(n)*time.Second < minAttemptTimeout {
+		return 0, fmt.Errorf("%s must be a whole number of seconds, at least %d; got %q",
+			AttemptTimeoutEnvVar, int(minAttemptTimeout/time.Second), v)
+	}
+	return time.Duration(n) * time.Second, nil
+}
+
 func minutes(name string, def time.Duration) func(v string) (time.Duration, error) {
 	return func(v string) (time.Duration, error) {
 		if v == "" {

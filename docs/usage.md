@@ -24,7 +24,6 @@ req := httpapi.RequestInput{
     Username:     new("reporting-bot"),                   // optional; basic auth
     APIKeyEnvVar: new("HTTP_CONNECTOR_SECRET_ITEMS"),     // optional
     // APIKeyParam: new("api_key"),                       // optional; puts the key in the query instead
-    TimeoutSeconds: new(int64(10)),                       // optional; 30 if unset
 }
 
 var resp httpapi.RequestOutput
@@ -51,8 +50,7 @@ JSON:
   "queryParams": {"source": "workflow"},
   "body": "{\"name\":\"widget\"}",
   "username": "reporting-bot",
-  "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_ITEMS",
-  "timeoutSeconds": 10
+  "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_ITEMS"
 }
 ```
 
@@ -88,7 +86,6 @@ Every field of `RequestInput`. A request with an unknown field or an unlisted me
 | `username` | No | none | Basic auth username. The password is the API key from `apiKeyEnvVar`. Needs `apiKeyEnvVar`; cannot be combined with `apiKeyParam`. |
 | `apiKeyEnvVar` | No | none | Name of an environment variable on the Connector that holds an API key. Must start with `HTTP_CONNECTOR_SECRET_`. |
 | `apiKeyParam` | No | none | Query parameter to put the API key in. If unset, the key goes in the `Authorization` header: as the basic auth password if `username` is set, otherwise as `Bearer <key>`. Needs `apiKeyEnvVar`. |
-| `timeoutSeconds` | No | 30 | Timeout for one attempt, 1 to 60 seconds. |
 
 `RequestOutput` has `statusCode`, `status` (such as `200 OK`), `headers` (each name with a list of values), `body`, and `durationMillis`.
 

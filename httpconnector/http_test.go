@@ -261,7 +261,13 @@ func TestRequest_NetworkFailureIsTransient(t *testing.T) {
 	require.False(t, ae.NonRetryable())
 }
 
-// A server slower than timeoutSeconds fails with a retryable Transient error.
+// shortRequests makes a's requests time out after 1s.
+func shortRequests(a *HTTPActivities) *HTTPActivities {
+	a.attemptTimeout = requestMargin + time.Second
+	return a
+}
+
+// A server slower than the request timeout fails with a retryable Transient error.
 func TestRequest_TimeoutIsTransient(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -274,16 +280,16 @@ func TestRequest_TimeoutIsTransient(t *testing.T) {
 	defer close(release)
 
 	start := time.Now()
-	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))})
+	_, err := runRequest(t, shortRequests(newWithWindow(testWindow)), httpapi.RequestInput{URL: srv.URL})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeTransient, ae.Type())
 	require.False(t, ae.NonRetryable())
-	require.Equal(t, fmt.Sprintf("calling %s: no response within timeoutSeconds (1s)", srv.URL), ae.Message())
-	require.Less(t, time.Since(start), 10*time.Second)
+	require.Equal(t, fmt.Sprintf("calling %s: no response within 1s", srv.URL), ae.Message())
+	require.Less(t, time.Since(start), 3*time.Second, "the request times out, not the attempt")
 }
 
-// A response whose body is still arriving when timeoutSeconds runs out fails with a retryable
-// Transient error that names timeoutSeconds.
+// A response whose body is still arriving when the request timeout runs out fails with a retryable
+// Transient error that names the timeout.
 func TestRequest_BodyTimeoutIsTransient(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -297,11 +303,13 @@ func TestRequest_BodyTimeoutIsTransient(t *testing.T) {
 	defer srv.Close()
 	defer close(release)
 
-	_, err := runRequest(t, newWithWindow(testWindow), httpapi.RequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))})
+	start := time.Now()
+	_, err := runRequest(t, shortRequests(newWithWindow(testWindow)), httpapi.RequestInput{URL: srv.URL})
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeTransient, ae.Type())
 	require.False(t, ae.NonRetryable())
-	require.Equal(t, fmt.Sprintf("reading the response from %s: not finished within timeoutSeconds (1s)", srv.URL), ae.Message())
+	require.Equal(t, fmt.Sprintf("reading the response from %s: not finished within 1s", srv.URL), ae.Message())
+	require.Less(t, time.Since(start), 3*time.Second, "the request times out, not the attempt")
 }
 
 // A TLS certificate that doesn't verify fails with a non-retryable ClientError: the next attempt
@@ -509,7 +517,7 @@ func TestRequest_RetryDelays(t *testing.T) {
 
 // The retry policy backs off 5s, then three times longer each attempt, at most 5m apart.
 func TestActivityOptions_RetryPolicy(t *testing.T) {
-	p := ActivityOptions("id", time.Hour).RetryPolicy
+	p := newWithWindow(testWindow).ActivityOptions("id", time.Hour).RetryPolicy
 	require.Equal(t, 5*time.Second, p.InitialInterval)
 	require.InDelta(t, 3.0, p.BackoffCoefficient, 0)
 	require.Equal(t, 5*time.Minute, p.MaximumInterval)
@@ -930,11 +938,6 @@ func TestValidate(t *testing.T) {
 			URL: "https://x.test", Username: new("bob"), APIKeyEnvVar: new(testSecretVar), APIKeyParam: new("key"),
 		}, "username can't be used with apiKeyParam"},
 		{"param without key", httpapi.RequestInput{URL: "https://x.test", APIKeyParam: new("key")}, "apiKeyEnvVar is not"},
-		{"shortest timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(1))}, ""},
-		{"longest timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(60))}, ""},
-		{"zero timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(0))}, "between 1 and 60"},
-		{"negative timeout", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(-5))}, "between 1 and 60"},
-		{"timeout over the attempt limit", httpapi.RequestInput{URL: "https://x.test", TimeoutSeconds: new(int64(61))}, "between 1 and 60"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Validate(tc.req)

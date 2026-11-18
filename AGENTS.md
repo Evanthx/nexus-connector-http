@@ -102,6 +102,7 @@ copies of it in one namespace share the same work.
    | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as any header's whole value. |
    | `HTTP_CONNECTOR_SECRET_*_DOMAINS` | **Required for each secret.** Where it may be sent: a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS` (domains with their subdomains, exact IPv4 addresses, or `DISABLE ALLOWLIST` for any allowed host). A secret without one, or one whose secret is unset or empty, makes the Connector exit at startup. A `_DOMAINS` variable is never a secret. |
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the Connector exit at startup. |
+   | `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` | Optional. Whole seconds ≥ 10, default 60. One attempt's `StartToCloseTimeout`; each HTTP request times out 5s sooner. A caller's Nexus timeout must be at least this + 10s. Any other value makes the Connector exit at startup. |
    | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the Connector exit at startup. |
    | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the Connector exit at startup. |
    | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | **Required.** Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. `DISABLE ALLOWLIST` (`DisableAllowlist`, any case) as the whole value allows any host. Unset or empty, or an entry that isn't a bare domain of at least two labels (scheme, port, path, `*`, empty, a single label such as `com` or `localhost`, or a partial IPv4 address such as `10.0`), makes the Connector exit at startup. An IPv4 entry matches only that address. |
@@ -129,7 +130,7 @@ The input as JSON:
 {"url": "https://api.example.com/items", "method": "POST",
  "headers": {"Content-Type": "application/json"}, "queryParams": {"source": "workflow"},
  "body": "{\"name\":\"widget\"}", "username": "reporting-bot",
- "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_ITEMS", "timeoutSeconds": 10}
+ "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_ITEMS"}
 ```
 
 | Field | Default | Notes |
@@ -141,7 +142,6 @@ The input as JSON:
 | `apiKeyEnvVar` | none | Name of a variable on the Connector, starting `HTTP_CONNECTOR_SECRET_`. |
 | `apiKeyParam` | none | Query parameter for the key. Unset: the key goes in `Authorization`, as `Bearer <key>`, or as the basic auth password with `username`. |
 | `username` | none | Basic auth user. Needs `apiKeyEnvVar`; can't be used with `apiKeyParam`. |
-| `timeoutSeconds` | 30 | One attempt, 1–60. |
 
 Only a **2xx** is a result. Redirects aren't followed unless `HTTP_CONNECTOR_ALLOW_REDIRECTS` is
 true; an unfollowed 3xx is a `ClientError` with its response. When true, they follow Go's default
@@ -157,7 +157,8 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   from the `operation-timeout` header, which the caller's server sets to the smaller of the
   operation's remaining `ScheduleToCloseTimeout` and its `StartToCloseTimeout`. No header, or more
   time than `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, means the maximum. A timeout under
-  `timeoutSeconds` + 10s fails at once with `InvalidRequest`. Cancelling the caller's workflow
+  one attempt (`HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS`, 60s by default) + 10s fails at once with
+  `InvalidRequest`. Cancelling the caller's workflow
   cancels the activity.
 - **Never put a secret in the request.** Name a `HTTP_CONNECTOR_SECRET_*` variable in
   `apiKeyEnvVar`, or as any header's whole value, such as `Authorization` or `X-Api-Key` (the
@@ -218,7 +219,7 @@ callers find it with `errors.As`. For an HTTP response, `Details` holds the `Req
 
 | Type | Cause | Retried |
 |---|---|---|
-| `InvalidRequest` | Can't be made: bad URL, `timeoutSeconds` outside 1–60, a caller timeout under `timeoutSeconds` + 10s, a host not in the allowed domains, a secret whose `_DOMAINS` list doesn't hold the host, invalid header name or value, two header names differing only in case, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
+| `InvalidRequest` | Can't be made: bad URL, a caller timeout under one attempt + 10s, a host not in the allowed domains, a secret whose `_DOMAINS` list doesn't hold the host, invalid header name or value, two header names differing only in case, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
 | `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a redirect to a host not in the allowed domains (message `redirected to "<host>", which is not on the Connector's list of allowed domains`, details the 3xx with its `Location`); a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
 | `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 5s×3 up to 5m (5s, 15s, 45s, 2m15s, 5m, …) |
 | `RateLimited` | 429, or the key is in the rate-limit cache. | After the window, or a shorter `Retry-After` |
@@ -249,8 +250,8 @@ go test -short ./...                                           # skip the end-to
 - The contract is `http.nexusrpc.yaml`. After editing it, run `make generate` and commit
   `generated/httpapi`; CI fails if it is stale. Never edit generated code. The service and
   operation `fqn`s pin the wire names `HTTPService`/`request`; without them nexgen would derive
-  `Request`. Keep them. Optional fields are pointers; `method` and `timeoutSeconds` have
-  `…OrDefault()` accessors. The generated `MarshalJSON`/`UnmarshalJSON` validate against the
+  `Request`. Keep them. Optional fields are pointers; `method` has a
+  `MethodOrDefault()` accessor. The generated `MarshalJSON`/`UnmarshalJSON` validate against the
   contract.
 - **A new environment variable goes in `httpconnector/settings.go` only**: a `settings.Define`
   with its help, default, required and check, added to a section of `Settings`; read it with
@@ -265,7 +266,7 @@ go test -short ./...                                           # skip the end-to
   `Settings`, `NewWithEnv`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`, `Request`) and
   `SecretEnvPrefix`. `New`, `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
-  `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
+  `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AttemptTimeoutEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
   the Connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
@@ -300,10 +301,12 @@ request through the code.
     `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
     `Request` with `ActivityOptions(id, total)`. Activity ID is `"http-" + Nexus request ID`, so a
     retried Nexus start reaches the same activity.
-  - `ActivityOptions`: StartToClose `attemptTimeout` 60s, which also caps `timeoutSeconds`;
+  - `ActivityOptions` (a method, since it needs the setting): StartToClose `attemptTimeout`, from
+    `AttemptTimeoutEnvVar` (default 60s, in `timeout.go`; each request's `http.Client` timeout is
+    `requestTimeout()`, `requestMargin` 5s less);
     ScheduleToClose from `ScheduleToClose`; no attempt limit; policy backoff 5s×3 up to 5m, used
     by Transient errors and attempt timeouts.
-  - `request.go`: `build`, in steps `parseURL`, `checkTimeouts`, `setQuery` (query parameters, a
+  - `request.go`: `build`, in steps `parseURL`, `setQuery` (query parameters, a
     query API key, and the `username`/`apiKeyParam` check), `setHeaders` (headers, the
     variable any header names via `secretEnv`, which reads it from `a.env` through `secretsFamily`, basic or Bearer auth, `httpguts` validation). Also
     `secretHeaderVars` (header → variable, for every header whose value starts with the prefix),
@@ -318,8 +321,8 @@ request through the code.
     only exactly.
   - `timeout.go`: `MaxDurationEnvVar` (default 25h, read by `New()` into
     `HTTPActivities.maxTotal`, exported as `MaxDuration()`; there is always a maximum), `callbackMargin` (10s), and
-    `ScheduleToClose(req, header)`: no header → the maximum; else header − margin, capped at the
-    maximum, or an error if under `timeoutSeconds`. The server rewrites the header at dispatch, so
+    `ScheduleToClose(header)`: no header → the maximum; else header − margin, capped at the
+    maximum, or an error if under one attempt. The server rewrites the header at dispatch, so
     queue time is already subtracted.
   - `ratelimiter.go`: the `limiter`, owned by `HTTPActivities`. A 429 marks the key; while marked,
     `Request` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired

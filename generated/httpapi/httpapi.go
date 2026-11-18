@@ -62,8 +62,6 @@ type RequestInput struct {
 	APIKeyParam *string `json:"apiKeyParam,omitempty"`
 	// Body Request body
 	Body *string `json:"body,omitempty"`
-	// TimeoutSeconds Timeout for one attempt, in seconds, from 1 to 60
-	TimeoutSeconds *int64 `json:"timeoutSeconds,omitempty"`
 }
 
 // MethodOrDefault returns Method when set, else the schema default.
@@ -72,14 +70,6 @@ func (m RequestInput) MethodOrDefault() RequestInputMethod {
 		return *m.Method
 	}
 	return RequestInputMethodGet
-}
-
-// TimeoutSecondsOrDefault returns TimeoutSeconds when set, else the schema default.
-func (m RequestInput) TimeoutSecondsOrDefault() int64 {
-	if m.TimeoutSeconds != nil {
-		return *m.TimeoutSeconds
-	}
-	return 30
 }
 
 // Validate checks m against every constraint and returns a PayloadValidationError
@@ -99,9 +89,6 @@ func (m RequestInput) Validate() error {
 	if m.QueryParams != nil {
 		mergeNested(&errs, "queryParams", m.QueryParams.Validate())
 	}
-	if m.TimeoutSeconds != nil && (*m.TimeoutSeconds < -integerCap || *m.TimeoutSeconds > integerCap) {
-		errs = append(errs, Violation{"timeoutSeconds", "exceeds ±(2^53-1) integer cap"})
-	}
 	if len(errs) > 0 {
 		return newPayloadValidationError(errs)
 	}
@@ -118,7 +105,7 @@ func (m *RequestInput) UnmarshalJSON(data []byte) error {
 	var errs []Violation
 	for k := range all {
 		switch k {
-		case "url", "method", "headers", "queryParams", "username", "apiKeyEnvVar", "apiKeyParam", "body", "timeoutSeconds":
+		case "url", "method", "headers", "queryParams", "username", "apiKeyEnvVar", "apiKeyParam", "body":
 		default:
 			errs = append(errs, Violation{memberPath(k), "unknown field"})
 		}
@@ -176,9 +163,6 @@ func (m *RequestInput) UnmarshalJSON(data []byte) error {
 	if v, ok := parseStringField(get("body"), "body", false, false, &errs); ok {
 		m.Body = &v
 	}
-	if v, ok := parseIntegerField(get("timeoutSeconds"), "timeoutSeconds", false, false, &errs); ok {
-		m.TimeoutSeconds = &v
-	}
 	if len(errs) > 0 {
 		return newPayloadValidationError(errs)
 	}
@@ -212,9 +196,6 @@ func (m RequestInput) MarshalJSON() ([]byte, error) {
 	}
 	if m.Body != nil {
 		marshalField(out, "body", *m.Body, &errs)
-	}
-	if m.TimeoutSeconds != nil {
-		marshalField(out, "timeoutSeconds", *m.TimeoutSeconds, &errs)
 	}
 	if len(errs) > 0 {
 		return nil, newPayloadValidationError(errs)

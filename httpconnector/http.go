@@ -37,6 +37,7 @@ type HTTPActivities struct {
 	domains        []string      // allowed domains; nil allows any host (DisableAllowlist)
 	allowRedirects bool          // whether redirects are followed
 	maxTotal       time.Duration // the longest a call may take in all
+	attemptTimeout time.Duration // the longest one attempt may take; each request gets requestMargin less
 	// secretDomains maps each secret variable to the domains it may be sent to (SecretDomainsSuffix);
 	// a nil list allows any allowed host. A variable not in it isn't sent anywhere.
 	secretDomains map[string][]string
@@ -53,7 +54,7 @@ func New() (*HTTPActivities, error) {
 // NewWithEnv returns HTTPActivities with an empty rate-limit cache, configured from env through
 // Settings: the rate-limit window from RateLimitMinutesEnvVar, the allowed domains from
 // AllowedDomainsEnvVar, whether to follow redirects from AllowRedirectsEnvVar, the longest a call
-// may take from MaxDurationEnvVar, and the domains each secret variable may be sent to from its
+// may take from MaxDurationEnvVar, the longest one attempt may take from AttemptTimeoutEnvVar, and the domains each secret variable may be sent to from its
 // SecretDomainsSuffix variable. Requests' secrets are read from env too. It checks every variable,
 // so the error names every invalid value at once, one per line.
 func NewWithEnv(env settings.Env) (*HTTPActivities, error) {
@@ -65,13 +66,14 @@ func NewWithEnv(env settings.Env) (*HTTPActivities, error) {
 	a.domains = allowedDomainsSetting.From(vals)
 	a.allowRedirects = allowRedirectsSetting.From(vals)
 	a.maxTotal = maxDurationSetting.From(vals)
+	a.attemptTimeout = attemptTimeoutSetting.From(vals)
 	a.secretDomains = secretsFamily.From(vals)
 	a.env = env
 	return a, nil
 }
 
 func newWithWindow(window time.Duration) *HTTPActivities {
-	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration, secretDomains: map[string][]string{}, env: settings.OS()}
+	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration, attemptTimeout: defaultAttemptTimeout, secretDomains: map[string][]string{}, env: settings.OS()}
 }
 
 // Register registers the HTTPService Nexus service and the Request activity its operation
@@ -107,7 +109,7 @@ func Register(w worker.Registry) error {
 			}
 			var total time.Duration
 			if err == nil {
-				total, err = a.ScheduleToClose(req, opts.Header.Get(nexus.HeaderOperationTimeout))
+				total, err = a.ScheduleToClose(opts.Header.Get(nexus.HeaderOperationTimeout))
 			}
 			if err != nil {
 				return temporalnexus.TemporalOperationResult[httpapi.RequestOutput]{}, &nexus.HandlerError{
@@ -115,7 +117,7 @@ func Register(w worker.Registry) error {
 					Cause: InvalidRequestError(err),
 				}
 			}
-			return temporalnexus.StartActivity(ctx, nc, ActivityOptions("http-"+opts.RequestID, total), a.Request, req)
+			return temporalnexus.StartActivity(ctx, nc, a.ActivityOptions("http-"+opts.RequestID, total), a.Request, req)
 		},
 	})
 	svc := nexus.NewService(httpapi.HTTPService.ServiceName)
@@ -124,10 +126,6 @@ func Register(w worker.Registry) error {
 	w.RegisterActivity(a.Request)
 	return nil
 }
-
-// attemptTimeout bounds one activity attempt, and so one HTTP request: a request's timeoutSeconds
-// can't be longer.
-const attemptTimeout = 60 * time.Second
 
 // The retry policy backs off from backoffInitial, three times longer each attempt, up to
 // backoffMax: 5s, 15s, 45s, 2m15s, then every 5m. A failing endpoint is rarely helped by being
@@ -151,10 +149,10 @@ const maxRedirects = 10
 // themselves (see rateLimitedError).
 // scheduleToClose, from ScheduleToClose, bounds the whole call, including every retry and
 // rate-limit wait.
-func ActivityOptions(id string, scheduleToClose time.Duration) client.StartActivityOptions {
+func (a *HTTPActivities) ActivityOptions(id string, scheduleToClose time.Duration) client.StartActivityOptions {
 	return client.StartActivityOptions{
 		ID:                     id,
-		StartToCloseTimeout:    attemptTimeout,
+		StartToCloseTimeout:    a.attemptTimeout,
 		ScheduleToCloseTimeout: scheduleToClose,
 		RetryPolicy: &temporal.RetryPolicy{
 			InitialInterval:    backoffInitial,
@@ -216,7 +214,7 @@ func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) 
 
 	secrets := secrets(a.env, req)
 	start := time.Now()
-	resp, err := (&http.Client{Timeout: timeout(req), CheckRedirect: a.checkRedirect(secretHeaderVars(req))}).Do(httpReq)
+	resp, err := (&http.Client{Timeout: a.requestTimeout(), CheckRedirect: a.checkRedirect(secretHeaderVars(req))}).Do(httpReq)
 	if err != nil {
 		// A *url.Error repeats the URL sent, which can have the API key in its query; req.URL can't.
 		var urlErr *url.Error
@@ -243,8 +241,8 @@ func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) 
 				redact(fmt.Sprintf("%s %v", req.URL, err), secrets), ErrorTypeClientError,
 				temporal.ApplicationErrorOptions{NonRetryable: true, Details: details})
 		}
-		if attemptTimedOut(err, start, req) {
-			msg := fmt.Sprintf("calling %s: no response within timeoutSeconds (%s)", req.URL, timeout(req))
+		if timedOut(err, start, a.requestTimeout()) {
+			msg := fmt.Sprintf("calling %s: no response within %s", req.URL, a.requestTimeout())
 			return httpapi.RequestOutput{}, transientError(msg, nil)
 		}
 		// The rest can still hold a secret the server echoed, such as in a redirect's Location.
@@ -261,8 +259,8 @@ func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
-		if attemptTimedOut(err, start, req) {
-			msg := fmt.Sprintf("reading the response from %s: not finished within timeoutSeconds (%s)", req.URL, timeout(req))
+		if timedOut(err, start, a.requestTimeout()) {
+			msg := fmt.Sprintf("reading the response from %s: not finished within %s", req.URL, a.requestTimeout())
 			return httpapi.RequestOutput{}, transientError(msg, nil)
 		}
 		msg := redact(fmt.Sprintf("reading the response from %s: %v", req.URL, err), secrets)
@@ -339,11 +337,11 @@ func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.RequestInp
 	})
 }
 
-// attemptTimedOut reports whether err is the attempt running out its timeoutSeconds. Other
+// timedOut reports whether err is the request, started at start, running out its timeout. Other
 // timeouts, such as the transport's 30-second dial timeout, keep Go's own message.
-func attemptTimedOut(err error, start time.Time, req httpapi.RequestInput) bool {
+func timedOut(err error, start time.Time, timeout time.Duration) bool {
 	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout(req)
+	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout
 }
 
 // redact replaces every secret in s with [REDACTED], in each form it can take in a response or an

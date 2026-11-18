@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 	"github.com/temporalio/nexus-connector-http/settings"
@@ -36,9 +35,6 @@ func Validate(req httpapi.RequestInput) error {
 func build(ctx context.Context, env settings.Env, req httpapi.RequestInput) (*http.Request, error) {
 	u, err := parseURL(req.URL)
 	if err != nil {
-		return nil, err
-	}
-	if err := checkTimeouts(req); err != nil {
 		return nil, err
 	}
 	headerKey, err := setQuery(u, env, req)
@@ -72,15 +68,6 @@ func parseURL(rawURL string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid URL %q: it has no host", rawURL)
 	}
 	return u, nil
-}
-
-// checkTimeouts checks that req's timeoutSeconds fits in one attempt.
-func checkTimeouts(req httpapi.RequestInput) error {
-	maxSecs := int64(attemptTimeout / time.Second)
-	if secs := req.TimeoutSecondsOrDefault(); secs < 1 || secs > maxSecs {
-		return fmt.Errorf("timeoutSeconds %d must be between 1 and %d", secs, maxSecs)
-	}
-	return nil
 }
 
 // setQuery adds req's query parameters to u's, and its API key if it goes in the query. It returns
@@ -253,11 +240,6 @@ func secrets(env settings.Env, req httpapi.RequestInput) []string {
 		}
 	}
 	return values
-}
-
-// timeout is the per-attempt timeout for req, which build has checked.
-func timeout(req httpapi.RequestInput) time.Duration {
-	return time.Duration(req.TimeoutSecondsOrDefault()) * time.Second
 }
 
 // value is *p, or "" if p is nil.

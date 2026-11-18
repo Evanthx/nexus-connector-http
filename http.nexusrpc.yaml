@@ -53,10 +53,6 @@ $defs:
       body:
         type: string
         description: "Request body"
-      timeoutSeconds:
-        type: integer
-        default: 30
-        description: "Timeout for one attempt, in seconds, from 1 to 60"
     required:
       - url
     additionalProperties: false

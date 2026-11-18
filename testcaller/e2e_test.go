@@ -66,6 +66,8 @@ func TestEndToEnd(t *testing.T) {
 
 	// The httptest servers listen on 127.0.0.1, so only they are allowed.
 	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1")
+	// Attempts of 10s, so requests of 5s, and callers need at least 10s + 10s margin.
+	t.Setenv(httpconnector.AttemptTimeoutEnvVar, "10")
 	// One secret may go to the httptest servers, the other only to a host they aren't.
 	t.Setenv(httpconnector.SecretEnvPrefix+"LOCAL", "l0cal")
 	t.Setenv(httpconnector.SecretEnvPrefix+"LOCAL"+httpconnector.SecretDomainsSuffix, "127.0.0.1")
@@ -153,7 +155,7 @@ func TestEndToEnd(t *testing.T) {
 		// would time out at 25s with no ApplicationError.
 		const timeout = 25 * time.Second
 		start := time.Now()
-		_, err := callWithTimeout(t, httpapi.RequestInput{URL: srv.URL, TimeoutSeconds: new(int64(1))}, timeout)
+		_, err := callWithTimeout(t, httpapi.RequestInput{URL: srv.URL}, timeout)
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeTransient, appErr.Type())
@@ -185,15 +187,15 @@ func TestEndToEnd(t *testing.T) {
 	})
 
 	t.Run("caller timeout too short for one attempt is rejected", func(t *testing.T) {
-		// timeoutSeconds defaults to 30, plus the 10s margin, is more than 20s.
-		_, err := callWithTimeout(t, httpapi.RequestInput{URL: "http://127.0.0.1:1/never"}, 20*time.Second)
+		// One 10s attempt plus the 10s margin is more than 15s.
+		_, err := callWithTimeout(t, httpapi.RequestInput{URL: "http://127.0.0.1:1/never"}, 15*time.Second)
 		var handlerErr *nexus.HandlerError
 		require.ErrorAs(t, err, &handlerErr)
 		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
-		require.Contains(t, appErr.Message(), "which leaves no time for an attempt: it needs at least timeoutSeconds (30s) plus 10s")
+		require.Contains(t, appErr.Message(), "which leaves no time for an attempt: it needs at least one attempt (10s, "+httpconnector.AttemptTimeoutEnvVar+") plus 10s")
 	})
 
 	t.Run("invalid request fails when the operation starts", func(t *testing.T) {
