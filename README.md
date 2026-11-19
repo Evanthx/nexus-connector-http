@@ -25,8 +25,8 @@ for another, following the principle of least privilege.
 ## What is the Outbound HTTP Connector?
 
 **Durable HTTP calls, ready to use.** The HTTP connector makes HTTP requests for your workflows.
-It runs as one program, the Outbound Connector: a Temporal worker, in the `connectors` namespace
-by default. A workflow describes a request (URL, method, headers, body, and which API key to use)
+It runs as one program, the Outbound Connector, which runs as a Nexus operation and makes HTTP
+requests: it sends requests **out** of Temporal to the APIs you call. A workflow describes a request (URL, method, headers, body, and which API key to use)
 and calls the Outbound Connector's one operation, `HTTPService.request`. The Outbound Connector
 sends the request, retries it when retrying can help, and returns the response or the final error.
 
