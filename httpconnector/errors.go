@@ -6,7 +6,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
-// Error types. Every failure the Connector returns is an ApplicationError with one of these as
+// Error types. Every failure the Outbound Connector returns is an ApplicationError with one of these as
 // its Type, so callers can branch on it.
 const (
 	// ErrorTypeRateLimited: the endpoint returned 429, or another call for the same rate-limit key

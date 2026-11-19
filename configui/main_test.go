@@ -28,9 +28,9 @@ const (
 	stripeDomains = stripe + httpconnector.SecretDomainsSuffix
 )
 
-// connectorClientMakers are the client constructors of the library the Connector calls
+// connectorClientMakers are the client constructors of the library the Outbound Connector calls
 // its service with, as "import path.Name", which configui must not call itself (see
-// TestNoOwnClient). None here: the Connector uses net/http, which clientMakers covers. Other
+// TestNoOwnClient). None here: the Outbound Connector uses net/http, which clientMakers covers. Other
 // repos list theirs, such as "github.com/stripe/stripe-go/v82.NewClient",
 // "github.com/slack-go/slack.New" or "github.com/twmb/franz-go/pkg/kgo.NewClient".
 var connectorClientMakers = []string{}
@@ -115,8 +115,8 @@ func TestSettings_JSON(t *testing.T) {
 	require.Equal(t, pageTitle, page.Title)
 	require.Len(t, page.Programs, 1)
 	p := page.Programs[0]
-	require.Equal(t, "connector", p.ID)
-	require.Equal(t, "go run ./cmd/worker", p.Command)
+	require.Equal(t, "outbound", p.ID)
+	require.Equal(t, "go run ./cmd/outbound", p.Command)
 
 	var names []string
 	for _, s := range p.Sections {
@@ -190,7 +190,7 @@ func TestSettings_JSON(t *testing.T) {
 	}
 }
 
-// Every variable envconfig reads and the Connector uses is in the Temporal section, and every
+// Every variable envconfig reads and the Outbound Connector uses is in the Temporal section, and every
 // setting of a profile maps to one of them.
 func TestTemporalSection_ListsWhatEnvconfigReads(t *testing.T) {
 	names := map[string]bool{}
@@ -272,7 +272,7 @@ server_name = "staging.example"
 	require.Equal(t, []string{"X_TENANT"}, meta.Instances, "a header the file sets is shown, so a value can override it")
 
 	// The Test reads the profile the page's values choose, the file's values under the page's.
-	raw, resp := postTest(t, h, testRequest{Program: "connector", Values: map[string]string{
+	raw, resp := postTest(t, h, testRequest{Program: "outbound", Values: map[string]string{
 		"TEMPORAL_CONFIG_FILE": file, "TEMPORAL_PROFILE": "staging", "TEMPORAL_ADDRESS": "127.0.0.1:1",
 		httpconnector.AllowedDomainsEnvVar: "example.com",
 	}})
@@ -283,7 +283,7 @@ server_name = "staging.example"
 		temporal.Passed)
 	require.Contains(t, temporal.Problems[0], "Failed to connect to Temporal at 127.0.0.1:1", "the page's address, not the file's")
 
-	_, resp = postTest(t, h, testRequest{Program: "connector", Values: map[string]string{
+	_, resp = postTest(t, h, testRequest{Program: "outbound", Values: map[string]string{
 		"TEMPORAL_CONFIG_FILE": file, "TEMPORAL_PROFILE": "missing", httpconnector.AllowedDomainsEnvVar: "example.com",
 	}})
 	require.Contains(t, checkTitled(t, resp, "Temporal").Problems[0], "unable to find profile missing")
@@ -295,13 +295,13 @@ func TestTest_ExternalVariables(t *testing.T) {
 	setTemporalTimeout(t, time.Second)
 	h := newServer(baseEnv(t, nil), programs)
 	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "NO_PROXY"} {
-		rec := post(t, h, `{"program":"connector","values":{"`+name+`":"http://x"}}`)
+		rec := post(t, h, `{"program":"outbound","values":{"`+name+`":"http://x"}}`)
 		require.Equal(t, http.StatusBadRequest, rec.Code, name)
 		require.Contains(t, rec.Body.String(), name+" is read by Go's HTTP client", name)
 	}
 
 	resp := testResponse{Checks: []check{{
-		Title:    "Connector",
+		Title:    "Outbound Connector",
 		Problems: []string{`proxyconnect tcp: invalid proxy address "http://u:pw%2Fsecret@proxy:bad": parse error`, "pw/secret alone"},
 	}}}
 	env := settings.Map{"HTTPS_PROXY": "http://u:pw%2Fsecret@proxy:bad"}
@@ -331,13 +331,13 @@ func TestLocalOnly(t *testing.T) {
 func TestTest_RefusesABadRequest(t *testing.T) {
 	h := newServer(baseEnv(t, nil), programs)
 	for body, want := range map[string]string{
-		`{"program":`:          "bad request",
-		`{"program":"reader"}`: `unknown program "reader"`,
-		`{"program":"connector","values":{"A=B":"x"}}`:     `"A=B" isn't a variable name`,
-		`{"program":"connector","values":{"1ABC":"x"}}`:    `"1ABC" isn't a variable name`,
-		`{"program":"connector","values":{"":"x"}}`:        `"" isn't a variable name`,
-		`{"program":"connector","values":{"A B":"x"}}`:     `"A B" isn't a variable name`,
-		`{"program":"connector","values":{"A\u0000":"x"}}`: `isn't a variable name`,
+		`{"program":`:           "bad request",
+		`{"program":"inbound"}`: `unknown program "inbound"`,
+		`{"program":"outbound","values":{"A=B":"x"}}`:     `"A=B" isn't a variable name`,
+		`{"program":"outbound","values":{"1ABC":"x"}}`:    `"1ABC" isn't a variable name`,
+		`{"program":"outbound","values":{"":"x"}}`:        `"" isn't a variable name`,
+		`{"program":"outbound","values":{"A B":"x"}}`:     `"A B" isn't a variable name`,
+		`{"program":"outbound","values":{"A\u0000":"x"}}`: `isn't a variable name`,
 	} {
 		rec := post(t, h, body)
 		require.Equal(t, http.StatusBadRequest, rec.Code, body)
@@ -345,7 +345,7 @@ func TestTest_RefusesABadRequest(t *testing.T) {
 	}
 }
 
-// The Settings check reports exactly what the Connector would at startup, every problem at once.
+// The Settings check reports exactly what the Outbound Connector would at startup, every problem at once.
 func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
 	setTemporalTimeout(t, time.Second)
 	values := map[string]string{
@@ -355,7 +355,7 @@ func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
 		stripe:                               "sk_typed",
 		"TEMPORAL_ADDRESS":                   "127.0.0.1:1",
 	}
-	_, resp := postTest(t, newServer(baseEnv(t, nil), programs), testRequest{Program: "connector", Values: values})
+	_, resp := postTest(t, newServer(baseEnv(t, nil), programs), testRequest{Program: "outbound", Values: values})
 	require.False(t, resp.OK)
 
 	_, startupErr := httpconnector.NewWithEnv(settings.Map(values))
@@ -363,7 +363,7 @@ func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
 	require.Equal(t, strings.Split(startupErr.Error(), "\n"), checkTitled(t, resp, "Settings").Problems)
 	require.Len(t, checkTitled(t, resp, "Settings").Problems, 4)
 	require.Contains(t, checkTitled(t, resp, "Temporal").Problems[0], "Failed to connect to Temporal at 127.0.0.1:1")
-	require.Equal(t, "Fix the settings first.", checkTitled(t, resp, "Connector").Skipped)
+	require.Equal(t, "Fix the settings first.", checkTitled(t, resp, "Outbound Connector").Skipped)
 }
 
 // A secret typed on the page is used for the test request and never comes back; a kept one is
@@ -387,7 +387,7 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 	})
 	h := newServer(base, programs)
 	req := testRequest{
-		Program: "connector",
+		Program: "outbound",
 		Values: map[string]string{
 			httpconnector.AllowedDomainsEnvVar:             "127.0.0.1",
 			httpconnector.SecretEnvPrefix + "KEPT_DOMAINS": "127.0.0.1",
@@ -402,7 +402,7 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 	require.Equal(t, "Bearer typed_s3cret", gotAuth, "the request used the page's secret")
 	require.NotContains(t, raw, "s3cret")
 
-	connector := checkTitled(t, resp, "Connector")
+	connector := checkTitled(t, resp, "Outbound Connector")
 	require.Empty(t, connector.Problems)
 	require.Contains(t, connector.Passed, "Secret "+httpconnector.SecretEnvPrefix+"KEPT may be sent to: 127.0.0.1")
 	require.Contains(t, connector.Passed, "Secret "+stripe+" may be sent to: 127.0.0.1")
@@ -418,12 +418,12 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 	require.NotContains(t, raw, "s3cret")
 }
 
-// A request the Connector refuses shows its error, and a secret's domain the allowlist doesn't
+// A request the Outbound Connector refuses shows its error, and a secret's domain the allowlist doesn't
 // allow is a problem.
 func TestTest_ConnectorProblems(t *testing.T) {
 	setTemporalTimeout(t, time.Second)
 	_, resp := postTest(t, newServer(baseEnv(t, nil), programs), testRequest{
-		Program: "connector",
+		Program: "outbound",
 		Values: map[string]string{
 			httpconnector.AllowedDomainsEnvVar: "example.com",
 			stripe:                             "sk",
@@ -434,10 +434,10 @@ func TestTest_ConnectorProblems(t *testing.T) {
 	})
 	require.False(t, resp.OK)
 	require.Equal(t, []string{
-		stripeDomains + ` lists "api.stripe.com", which isn't within ` + httpconnector.AllowedDomainsEnvVar + ", so the Connector won't call it",
-		`GET https://not-allowed.test/: InvalidRequest: domain "not-allowed.test" is not on the Connector's list of allowed domains (` +
+		stripeDomains + ` lists "api.stripe.com", which isn't within ` + httpconnector.AllowedDomainsEnvVar + ", so the Outbound Connector won't call it",
+		`GET https://not-allowed.test/: InvalidRequest: domain "not-allowed.test" is not on the Outbound Connector's list of allowed domains (` +
 			httpconnector.AllowedDomainsEnvVar + ")",
-	}, checkTitled(t, resp, "Connector").Problems)
+	}, checkTitled(t, resp, "Outbound Connector").Problems)
 }
 
 // The page's values replace every variable the program owns; others pass through.
@@ -493,7 +493,7 @@ func TestTest_Temporal(t *testing.T) {
 
 	base := baseEnv(t, nil)
 	h := newServer(base, programs)
-	req := testRequest{Program: "connector", Values: map[string]string{
+	req := testRequest{Program: "outbound", Values: map[string]string{
 		httpconnector.AllowedDomainsEnvVar: "example.com",
 		"TEMPORAL_ADDRESS":                 server.FrontendHostPort(),
 		"TEMPORAL_CONFIG_FILE":             base["TEMPORAL_CONFIG_FILE"], // as the page sends every variable it shows

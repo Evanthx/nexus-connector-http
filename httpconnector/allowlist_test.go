@@ -82,7 +82,7 @@ func TestCheckDomain(t *testing.T) {
 		"http://x.127.0.0.1/",
 	} {
 		err := a.CheckDomain(blocked)
-		require.ErrorContains(t, err, "is not on the Connector's list of allowed domains", blocked)
+		require.ErrorContains(t, err, "is not on the Outbound Connector's list of allowed domains", blocked)
 	}
 }
 
@@ -97,7 +97,7 @@ func TestRequest_DomainNotAllowed(t *testing.T) {
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeInvalidRequest, ae.Type())
 	require.True(t, ae.NonRetryable())
-	require.Contains(t, ae.Message(), `domain "127.0.0.1" is not on the Connector's list of allowed domains (`+AllowedDomainsEnvVar+")")
+	require.Contains(t, ae.Message(), `domain "127.0.0.1" is not on the Outbound Connector's list of allowed domains (`+AllowedDomainsEnvVar+")")
 	require.Zero(t, hits.Load())
 
 	a.domains = []string{"example.com", strings.Split(strings.TrimPrefix(srv.URL, "http://"), ":")[0]}
@@ -133,7 +133,7 @@ func TestRequest_RedirectOffAllowlistIsNotFollowed(t *testing.T) {
 	ae := appErr(t, err)
 	require.Equal(t, ErrorTypeClientError, ae.Type())
 	require.True(t, ae.NonRetryable())
-	require.Equal(t, srv.URL+` redirected to "localhost", which is not on the Connector's list of allowed domains (`+
+	require.Equal(t, srv.URL+` redirected to "localhost", which is not on the Outbound Connector's list of allowed domains (`+
 		AllowedDomainsEnvVar+"), so the redirect wasn't followed", ae.Message())
 	var resp httpapi.RequestOutput
 	require.NoError(t, ae.Details(&resp))

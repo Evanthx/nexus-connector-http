@@ -131,7 +131,7 @@ func TestCheckSecretDomains(t *testing.T) {
 		require.Contains(t, err.Error(), `may not be sent to "`+tc.host+`"`, tc.req.URL)
 	}
 
-	// A variable without a list, such as one set after the Connector started, isn't sent anywhere.
+	// A variable without a list, such as one set after the Outbound Connector started, isn't sent anywhere.
 	err := a.CheckSecretDomains(key("https://api.stripe.com/", "HTTP_CONNECTOR_SECRET_LATER"))
 	require.ErrorContains(t, err, "HTTP_CONNECTOR_SECRET_LATER has no HTTP_CONNECTOR_SECRET_LATER_DOMAINS")
 

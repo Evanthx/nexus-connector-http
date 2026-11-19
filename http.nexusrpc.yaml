@@ -33,7 +33,7 @@ $defs:
         type: object
         additionalProperties:
           type: string
-        description: "Request headers. A value that starts with HTTP_CONNECTOR_SECRET_ names an environment variable on the Connector, whose value is sent instead"
+        description: "Request headers. A value that starts with HTTP_CONNECTOR_SECRET_ names an environment variable on the Outbound Connector, whose value is sent instead"
       queryParams:
         type: object
         additionalProperties:
@@ -45,7 +45,7 @@ $defs:
       apiKeyEnvVar:
         type: string
         x-go-name: APIKeyEnvVar
-        description: "Name of an environment variable on the Connector that holds an API key. The name must start with HTTP_CONNECTOR_SECRET_. The value is read at call time and never enters history"
+        description: "Name of an environment variable on the Outbound Connector that holds an API key. The name must start with HTTP_CONNECTOR_SECRET_. The value is read at call time and never enters history"
       apiKeyParam:
         type: string
         x-go-name: APIKeyParam

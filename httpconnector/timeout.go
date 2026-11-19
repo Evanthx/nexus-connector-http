@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// MaxDurationEnvVar names the environment variable on the Connector that sets the longest
+// MaxDurationEnvVar names the environment variable on the Outbound Connector that sets the longest
 // a call may take in all, including every retry and rate-limit wait, in whole minutes, at least
 // 1. It applies when the caller's Nexus operation has longer left, or no timeout.
 const MaxDurationEnvVar = "HTTP_CONNECTOR_MAX_DURATION_MINUTES"
@@ -13,9 +13,9 @@ const MaxDurationEnvVar = "HTTP_CONNECTOR_MAX_DURATION_MINUTES"
 // defaultMaxDuration is the maximum when MaxDurationEnvVar is unset or empty.
 const defaultMaxDuration = 25 * time.Hour
 
-// AttemptTimeoutEnvVar names the environment variable on the Connector that sets how long one
+// AttemptTimeoutEnvVar names the environment variable on the Outbound Connector that sets how long one
 // attempt may take, in whole seconds, at least minAttemptTimeout. Each HTTP request gets
-// requestMargin less, so it times out, with the Connector's own error, before the attempt does.
+// requestMargin less, so it times out, with the Outbound Connector's own error, before the attempt does.
 const AttemptTimeoutEnvVar = "HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS"
 
 const (
@@ -33,7 +33,7 @@ func (a *HTTPActivities) requestTimeout() time.Duration {
 	return a.attemptTimeout - requestMargin
 }
 
-// callbackMargin is how long before the caller's Nexus operation times out the Connector stops
+// callbackMargin is how long before the caller's Nexus operation times out the Outbound Connector stops
 // trying, so its last error reaches the caller before the caller gives up: time to start the
 // activity and to deliver the completion callback.
 const callbackMargin = 10 * time.Second
@@ -42,7 +42,7 @@ const callbackMargin = 10 * time.Second
 // rate-limit wait. operationTimeout is the operation-timeout header, the time the caller's Nexus
 // operation has left, which its server sets when the operation has a timeout; empty means it has
 // none. The call ends callbackMargin before the operation times out, so the caller gets the
-// Connector's last error rather than a timeout, and never takes longer than the Connector's
+// Outbound Connector's last error rather than a timeout, and never takes longer than the Outbound Connector's
 // maximum (MaxDurationEnvVar).
 //
 // It reports an error if the operation has too little time left for one attempt

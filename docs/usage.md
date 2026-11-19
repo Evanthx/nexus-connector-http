@@ -1,6 +1,6 @@
 # Usage
 
-Calling the Connector from Go and other languages, the full options table, API keys and secrets, and allowed domains.
+Calling the Outbound Connector from Go and other languages, the full options table, API keys and secrets, and allowed domains.
 
 ## Call from a Go workflow
 
@@ -28,17 +28,17 @@ req := httpapi.RequestInput{
 
 var resp httpapi.RequestOutput
 err := c.ExecuteOperation(ctx, httpapi.HTTPService.Request, req, workflow.NexusOperationOptions{
-    ScheduleToCloseTimeout: time.Hour, // the Connector retries until 10 seconds before this
+    ScheduleToCloseTimeout: time.Hour, // the Outbound Connector retries until 10 seconds before this
 }).Get(ctx, &resp)
 // On success: resp.StatusCode, resp.Status, resp.Headers, resp.Body, resp.DurationMillis.
 // On failure: see docs/errors.md.
 ```
 
-This sends `POST https://api.example.com/items?source=workflow` with the JSON body and basic auth: user `reporting-bot`, password the value of `HTTP_CONNECTOR_SECRET_ITEMS` read from the Connector's environment.
+This sends `POST https://api.example.com/items?source=workflow` with the JSON body and basic auth: user `reporting-bot`, password the value of `HTTP_CONNECTOR_SECRET_ITEMS` read from the Outbound Connector's environment.
 
 ## Call from another language
 
-Use a client generated for your language from the Connector's contract; see
+Use a client generated for your language from the Outbound Connector's contract; see
 [Typed clients](clients.md). Or send the input as JSON from any Nexus client. The same request as
 JSON:
 
@@ -80,28 +80,28 @@ Every field of `RequestInput`. A request with an unknown field or an unlisted me
 |---|---|---|---|
 | `url` | **Yes** | | Absolute `http` or `https` URL. |
 | `method` | No | `GET` | `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, or `OPTIONS`, in upper case. |
-| `headers` | No | none | Request headers; names that differ only in case are one header, so a request with both is rejected. A value that starts with `HTTP_CONNECTOR_SECRET_` names an environment variable on the Connector; the Connector sends its value instead. See [API keys and secrets](#api-keys-and-secrets). |
+| `headers` | No | none | Request headers; names that differ only in case are one header, so a request with both is rejected. A value that starts with `HTTP_CONNECTOR_SECRET_` names an environment variable on the Outbound Connector; the Outbound Connector sends its value instead. See [API keys and secrets](#api-keys-and-secrets). |
 | `queryParams` | No | none | Query parameters, added to any already in the URL. |
 | `body` | No | none | Request body, as a string. |
 | `username` | No | none | Basic auth username. The password is the API key from `apiKeyEnvVar`. Needs `apiKeyEnvVar`; cannot be combined with `apiKeyParam`. |
-| `apiKeyEnvVar` | No | none | Name of an environment variable on the Connector that holds an API key. Must start with `HTTP_CONNECTOR_SECRET_`. |
+| `apiKeyEnvVar` | No | none | Name of an environment variable on the Outbound Connector that holds an API key. Must start with `HTTP_CONNECTOR_SECRET_`. |
 | `apiKeyParam` | No | none | Query parameter to put the API key in. If unset, the key goes in the `Authorization` header: as the basic auth password if `username` is set, otherwise as `Bearer <key>`. Needs `apiKeyEnvVar`. |
 
 `RequestOutput` has `statusCode`, `status` (such as `200 OK`), `headers` (each name with a list of values), `body`, and `durationMillis`.
 
 ## API keys and secrets
 
-API keys never enter the request input or workflow history. A request names an environment variable on the Connector (`apiKeyEnvVar`), and the Connector reads it at request time. `apiKeyParam` says where the key goes in the request: a named query parameter, or, if unset, the `Authorization` header. In the header it is the basic auth password when the request has a `username` (for APIs such as Twilio and Mailgun that pair an account name with a secret), and otherwise a `Bearer` token.
+API keys never enter the request input or workflow history. A request names an environment variable on the Outbound Connector (`apiKeyEnvVar`), and the Outbound Connector reads it at request time. `apiKeyParam` says where the key goes in the request: a named query parameter, or, if unset, the `Authorization` header. In the header it is the basic auth password when the request has a `username` (for APIs such as Twilio and Mailgun that pair an account name with a secret), and otherwise a `Bearer` token.
 
-The variable's name must start with `HTTP_CONNECTOR_SECRET_`. Without that prefix, any caller could cause the Connector to forward any environment variable (such as its Temporal API key) to a URL the caller controls.
+The variable's name must start with `HTTP_CONNECTOR_SECRET_`. Without that prefix, any caller could cause the Outbound Connector to forward any environment variable (such as its Temporal API key) to a URL the caller controls.
 
-Every secret variable also needs a partner, the same name plus `_DOMAINS`, listing the hosts the secret may be sent to. Without one, the Connector doesn't start. It is a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS`: comma-separated domains, each allowing itself and its subdomains, or IPv4 addresses, each allowing only itself. A request that would send a secret to any other host fails with `InvalidRequest` before anything is sent, so a caller can't send one API's key to another allowed host:
+Every secret variable also needs a partner, the same name plus `_DOMAINS`, listing the hosts the secret may be sent to. Without one, the Outbound Connector doesn't start. It is a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS`: comma-separated domains, each allowing itself and its subdomains, or IPv4 addresses, each allowing only itself. A request that would send a secret to any other host fails with `InvalidRequest` before anything is sent, so a caller can't send one API's key to another allowed host:
 
 ```
 HTTP_CONNECTOR_SECRET_WEATHER may not be sent to "api.example.com": it isn't in HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS
 ```
 
-For example, with this in the Connector's terminal:
+For example, with this in the Outbound Connector's terminal:
 
 ```bash
 export HTTP_CONNECTOR_SECRET_WEATHER=...
@@ -116,7 +116,7 @@ a request can use it:
  "apiKeyEnvVar": "HTTP_CONNECTOR_SECRET_WEATHER", "apiKeyParam": "key"}
 ```
 
-Any header value can also reference a secret: if the whole value starts with `HTTP_CONNECTOR_SECRET_`, it is the name of a variable, and the Connector sends that variable's value as the header. The variable holds the entire header value, scheme included:
+Any header value can also reference a secret: if the whole value starts with `HTTP_CONNECTOR_SECRET_`, it is the name of a variable, and the Outbound Connector sends that variable's value as the header. The variable holds the entire header value, scheme included:
 
 ```bash
 export HTTP_CONNECTOR_SECRET_ITEMS_AUTH='Bearer ...'
@@ -149,42 +149,42 @@ export HTTP_CONNECTOR_SECRET_GOOGLE_KEY_DOMAINS="google.com, googleapis.com"
 export HTTP_CONNECTOR_SECRET_LAN_TOKEN_DOMAINS=10.0.0.5
 ```
 
-`DISABLE ALLOWLIST` as a list lets the secret go to any host `HTTP_CONNECTOR_ALLOWED_DOMAINS` allows. A variable ending in `_DOMAINS` is always a list, never a secret, and a request can't name one as a key. A list whose secret is unset or empty also stops the Connector, which catches a misspelled name.
+`DISABLE ALLOWLIST` as a list lets the secret go to any host `HTTP_CONNECTOR_ALLOWED_DOMAINS` allows. A variable ending in `_DOMAINS` is always a list, never a secret, and a request can't name one as a key. A list whose secret is unset or empty also stops the Outbound Connector, which catches a misspelled name.
 
 Any other header value is sent as-is and stored in workflow history.
 
-The Connector also prevents keys from leaking in responses:
+The Outbound Connector also prevents keys from leaking in responses:
 
 - **Echoes are redacted.** Some endpoints echo back what they received (httpbin does). Every secret value, and the credentials of a header variable without the scheme, is replaced with `[REDACTED]` in the response's status, headers, and body, and in error messages — raw, URL-escaped, quoted, and JSON-escaped. Base64-encoded values are not caught.
 - **Redirects are off by default.** See [Redirects](#redirects).
 
 ## Redirects
 
-By default the Connector follows no redirects, not even to the same host. A 3xx fails as a non-retryable `ClientError` whose details hold the response, including its `Location`; the caller can request that URL itself if it should be followed.
+By default the Outbound Connector follows no redirects, not even to the same host. A 3xx fails as a non-retryable `ClientError` whose details hold the response, including its `Location`; the caller can request that URL itself if it should be followed.
 
-Set `HTTP_CONNECTOR_ALLOW_REDIRECTS=true` on the Connector to follow them, up to 10. Any value other than `true` or `false` (or another value Go's `strconv.ParseBool` accepts) makes the Connector exit at startup. With redirects on:
+Set `HTTP_CONNECTOR_ALLOW_REDIRECTS=true` on the Outbound Connector to follow them, up to 10. Any value other than `true` or `false` (or another value Go's `strconv.ParseBool` accepts) makes the Outbound Connector exit at startup. With redirects on:
 
 - **Never to plaintext.** A redirect from `https` to a non-`https` URL is not followed; it is returned as a `ClientError`.
 - **Only to allowed domains.** Every redirect is checked against `HTTP_CONNECTOR_ALLOWED_DOMAINS` (see [Allowed domains](#allowed-domains)). With `DISABLE ALLOWLIST`, a redirect can go to any host.
-- **Secrets stay with the original site.** Once a redirect goes to a host that is neither the original host nor a subdomain of it, Go drops the `Authorization` and `Cookie` headers, and the Connector also drops every header filled from an `HTTP_CONNECTOR_SECRET_*` variable. They stay dropped if a later redirect comes back. `Referer`, which would carry a query-parameter API key, is never sent on a redirect.
+- **Secrets stay with the original site.** Once a redirect goes to a host that is neither the original host nor a subdomain of it, Go drops the `Authorization` and `Cookie` headers, and the Outbound Connector also drops every header filled from an `HTTP_CONNECTOR_SECRET_*` variable. They stay dropped if a later redirect comes back. `Referer`, which would carry a query-parameter API key, is never sent on a redirect.
 - **Literal headers follow.** A header with a literal value, such as `"X-Api-Key": "abc"`, is sent to every host the redirect reaches, as Go, curl and Python `requests` do. Use a secret variable for any credential.
 
 ## Allowed domains
 
-`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required. Set it on the Connector to a comma-separated list of domains, such as `temporal.io, google.com, stripe.com`. Spaces are ignored; case does not matter. A domain allows itself and all its subdomains: `temporal.io` allows `docs.temporal.io` but not `eviltemporal.io`. An IPv4 address such as `10.0.0.5` allows only that exact address, not names under it such as `x.10.0.0.5`. It must be a complete address: a partial one such as `10.0` or `0.5` is rejected, since an entry ending in a number is read as an IPv4 address. Each entry must be a bare domain of at least two labels, with no scheme, port, path, or wildcard: a single label such as `com` or `localhost` is rejected, since `com` would allow every `.com` host. An invalid or empty entry, or leaving the variable unset or empty, makes the Connector exit at startup.
+`HTTP_CONNECTOR_ALLOWED_DOMAINS` is required. Set it on the Outbound Connector to a comma-separated list of domains, such as `temporal.io, google.com, stripe.com`. Spaces are ignored; case does not matter. A domain allows itself and all its subdomains: `temporal.io` allows `docs.temporal.io` but not `eviltemporal.io`. An IPv4 address such as `10.0.0.5` allows only that exact address, not names under it such as `x.10.0.0.5`. It must be a complete address: a partial one such as `10.0` or `0.5` is rejected, since an entry ending in a number is read as an IPv4 address. Each entry must be a bare domain of at least two labels, with no scheme, port, path, or wildcard: a single label such as `com` or `localhost` is rejected, since `com` would allow every `.com` host. An invalid or empty entry, or leaving the variable unset or empty, makes the Outbound Connector exit at startup.
 
-To allow any host, set it to `DISABLE ALLOWLIST` (case does not matter; it must be the whole value). The Connector then calls any `http` or `https` URL, including addresses on the Connector's own network.
+To allow any host, set it to `DISABLE ALLOWLIST` (case does not matter; it must be the whole value). The Outbound Connector then calls any `http` or `https` URL, including addresses on the Outbound Connector's own network.
 
 A request to a disallowed host fails with `InvalidRequest`:
 
 ```
-domain "example.com" is not on the Connector's list of allowed domains
+domain "example.com" is not on the Outbound Connector's list of allowed domains
 ```
 
 Followed redirects are checked too. A redirect to a host not on the list is not followed and fails as a `ClientError`:
 
 ```
-https://docs.example.com/start redirected to "evil.example.net", which is not on the Connector's
+https://docs.example.com/start redirected to "evil.example.net", which is not on the Outbound Connector's
 list of allowed domains (HTTP_CONNECTOR_ALLOWED_DOMAINS), so the redirect wasn't followed
 ```
 
@@ -192,6 +192,6 @@ The error details hold the redirect's status and headers, including the `Locatio
 
 ## APIs that report errors in a 200
 
-The Connector decides what to do from the HTTP status code alone. For an API that answers
+The Outbound Connector decides what to do from the HTTP status code alone. For an API that answers
 `200 OK` with an error or a rate limit in the body, see
 [How it works: APIs that don't follow the standard](how-it-works.md#apis-that-dont-follow-the-standard).

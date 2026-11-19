@@ -32,12 +32,12 @@ A request that does not match the contract (unknown field, unlisted method, miss
 
 | Setting | Set by | Bounds | Default |
 |---|---|---|---|
-| `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` | the Connector | one attempt, at least 10 seconds; each HTTP request times out 5 seconds sooner | 60 |
-| Nexus operation timeout | the caller | how long the caller waits; the Connector retries until 10 seconds before it | none |
-| `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | the Connector | the longest the Connector keeps retrying, regardless of the caller's timeout | 1500 (25 hours) |
-| `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | the Connector | how long a 429 holds back requests with the same key | 5 minutes |
+| `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` | the Outbound Connector | one attempt, at least 10 seconds; each HTTP request times out 5 seconds sooner | 60 |
+| Nexus operation timeout | the caller | how long the caller waits; the Outbound Connector retries until 10 seconds before it | none |
+| `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | the Outbound Connector | the longest the Outbound Connector keeps retrying, regardless of the caller's timeout | 1500 (25 hours) |
+| `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | the Outbound Connector | how long a 429 holds back requests with the same key | 5 minutes |
 
-The caller's server sends the remaining operation time in the `operation-timeout` header (the smaller of the remaining `ScheduleToCloseTimeout` and `StartToCloseTimeout`). The Connector retries until 10 seconds before that value, so the last error reaches the caller before it gives up. If the header is absent or the remaining time exceeds `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, the maximum applies.
+The caller's server sends the remaining operation time in the `operation-timeout` header (the smaller of the remaining `ScheduleToCloseTimeout` and `StartToCloseTimeout`). The Outbound Connector retries until 10 seconds before that value, so the last error reaches the caller before it gives up. If the header is absent or the remaining time exceeds `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, the maximum applies.
 
 A caller timeout that is too short for one attempt plus 10 seconds fails immediately with `InvalidRequest`:
 
@@ -47,26 +47,26 @@ least one attempt (1m0s, HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS) plus 10s for th
 the caller; give the operation a longer timeout
 ```
 
-Cancelling a caller workflow cancels the Connector activity. Any attempt already in flight finishes, but no further attempts are made.
+Cancelling a caller workflow cancels the Outbound Connector activity. Any attempt already in flight finishes, but no further attempts are made.
 
 ## Rate limiting
 
-The Connector keeps an in-memory cache of rate-limited keys. The key for a request is its URL plus the identity of the caller: the basic auth username, else the API key variable name, else the `Authorization` header's variable name, else `anon`.
+The Outbound Connector keeps an in-memory cache of rate-limited keys. The key for a request is its URL plus the identity of the caller: the basic auth username, else the API key variable name, else the `Authorization` header's variable name, else `anon`.
 
 - When an endpoint answers **429**, the key is cached for the rate-limit window and the request fails with `RateLimited`. If the 429 has a `Retry-After` header (seconds or an HTTP date) asking for less time than the window, the key is cached for that long instead. A longer, zero, past or unreadable `Retry-After` is ignored.
 - While a key is cached, every request with the same key fails with `RateLimited` **without being sent**, and retries when the key expires.
 - A **2xx** response clears the key.
 
-The window is `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` on the Connector (a whole number of minutes, at least 1, default 5).
+The window is `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` on the Outbound Connector (a whole number of minutes, at least 1, default 5).
 
-However many callers are waiting, one Connector tries a rate-limited endpoint about once per window. The timing is not strict: when the window ends, all waiting requests retry at once; if the first 429 arrives before the others check, they wait another window.
+However many callers are waiting, one Outbound Connector tries a rate-limited endpoint about once per window. The timing is not strict: when the window ends, all waiting requests retry at once; if the first 429 arrives before the others check, they wait another window.
 
-The Connector does not schedule a retry that would start after the caller's operation timeout, so the window and the timeout together bound the number of attempts. With the default 25-hour maximum and a 5-minute window, an endpoint that keeps answering 429 is tried about every 5 minutes for 25 hours. With a 10-minute caller timeout, it is tried twice and fails after about 5 minutes.
+The Outbound Connector does not schedule a retry that would start after the caller's operation timeout, so the window and the timeout together bound the number of attempts. With the default 25-hour maximum and a 5-minute window, an endpoint that keeps answering 429 is tried about every 5 minutes for 25 hours. With a 10-minute caller timeout, it is tried twice and fails after about 5 minutes.
 
 ## Known limitations
 
-- **The rate-limit cache is in memory.** It is lost when the Connector restarts, and each Connector process has its own. A production deployment would use a shared store such as Redis with a TTL.
+- **The rate-limit cache is in memory.** It is lost when the Outbound Connector restarts, and each Outbound Connector process has its own. A production deployment would use a shared store such as Redis with a TTL.
 - **No early wake-up.** When a rate-limited key clears, waiting requests still wait until their next scheduled retry rather than waking immediately.
 - **Text bodies only.** Bodies are JSON strings, so binary content would need base64 encoding.
 - **Response size limit.** The whole response body is returned in the activity result. A body over 2 MiB fails with `ClientError`. A smaller body near Temporal's default payload limit (2 MB) may also fail to be returned.
-- **Any URL, if the allowlist is disabled.** With `HTTP_CONNECTOR_ALLOWED_DOMAINS=DISABLE ALLOWLIST`, the Connector calls any `http` or `https` URL, including addresses on its own internal network. List the allowed domains instead in environments where that matters.
+- **Any URL, if the allowlist is disabled.** With `HTTP_CONNECTOR_ALLOWED_DOMAINS=DISABLE ALLOWLIST`, the Outbound Connector calls any `http` or `https` URL, including addresses on its own internal network. List the allowed domains instead in environments where that matters.

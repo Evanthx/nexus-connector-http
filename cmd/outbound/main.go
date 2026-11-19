@@ -1,4 +1,4 @@
-// Command worker runs the Connector, the HTTP connector's one program: the HTTPService Nexus
+// Command outbound runs the Outbound Connector, the HTTP connector's one program: the HTTPService Nexus
 // service and the Request activity its operation starts.
 //
 // It connects with the standard Temporal client configuration: the TEMPORAL_* environment
@@ -17,12 +17,12 @@ import (
 )
 
 func main() {
-	// Check the Connector's configuration and the connection to Temporal before stopping on
+	// Check the Outbound Connector's configuration and the connection to Temporal before stopping on
 	// either, so one run reports every problem rather than only the first.
 	var problems []string
 	connector, err := httpconnector.New()
 	if err != nil {
-		problems = append(problems, "Invalid Connector configuration:\n"+indent(err.Error()))
+		problems = append(problems, "Invalid Outbound Connector configuration:\n"+indent(err.Error()))
 	}
 	opts, err := httpconnector.ClientOptions(settings.OS())
 	if err != nil {
@@ -39,13 +39,13 @@ func main() {
 		if c != nil {
 			c.Close()
 		}
-		log.Fatalf("The Connector can't start:\n%s", strings.Join(problems, "\n"))
+		log.Fatalf("The Outbound Connector can't start:\n%s", strings.Join(problems, "\n"))
 	}
 	defer c.Close()
 
 	w := worker.New(c, httpconnector.TaskQueue, worker.Options{})
 	if err := httpconnector.Register(w); err != nil {
-		log.Fatalf("Failed to configure the Connector: %v", err)
+		log.Fatalf("Failed to configure the Outbound Connector: %v", err)
 	}
 
 	for _, line := range connector.Describe() {

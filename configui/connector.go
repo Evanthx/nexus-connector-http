@@ -1,6 +1,6 @@
 package main
 
-// This file is what the setup page knows about this repo's program, the Connector, and the checks
+// This file is what the setup page knows about this repo's program, the Outbound Connector, and the checks
 // particular to it. The variables themselves come from httpconnector.Settings. The rest of
 // configui is the same in every Go connector repo.
 
@@ -31,7 +31,7 @@ var programs = []program{{
 	TestFields: []testField{
 		{
 			ID: "url", Kind: "text", Label: "Test request URL", Placeholder: "https://httpbin.org/get",
-			Help: "Optional. The Test sends one GET to this URL through the Connector's own request code, with the " +
+			Help: "Optional. The Test sends one GET to this URL through the Outbound Connector's own request code, with the " +
 				"settings above, and shows the status or the error. The host must be allowed.",
 		},
 		{
@@ -40,14 +40,14 @@ var programs = []program{{
 				"`apiKeyEnvVar` would. The URL's host must be in its allowed domains.",
 		},
 	},
-	Check: checkConnector,
+	Check: checkOutbound,
 }}
 
-// checkConnector builds the Connector from env as the Connector does, then reports what it allows,
+// checkOutbound builds the Outbound Connector from env as it builds itself at startup, then reports what it allows,
 // any secret domain the allowlist doesn't allow, and, if fields has a url, the result of one GET
-// sent through the Connector's Request activity.
-func checkConnector(_ context.Context, env settings.Env, fields map[string]string) check {
-	c := check{Title: "Connector"}
+// sent through the Outbound Connector's Request activity.
+func checkOutbound(_ context.Context, env settings.Env, fields map[string]string) check {
+	c := check{Title: "Outbound Connector"}
 	a, err := httpconnector.NewWithEnv(env)
 	if err != nil {
 		c.Skipped = "Fix the settings first."
@@ -94,7 +94,7 @@ func sendTest(a *httpconnector.HTTPActivities, req httpapi.RequestInput) (httpap
 	return out, err
 }
 
-// describeError is the Connector's error type and message, with the response's status if it has
+// describeError is the Outbound Connector's error type and message, with the response's status if it has
 // one.
 func describeError(err error) string {
 	var ae *temporal.ApplicationError

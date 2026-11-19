@@ -1,15 +1,15 @@
 # Typed clients
 
-A workflow calls the Connector through Nexus by naming a service, an operation, and an input. You
+A workflow calls the Outbound Connector through Nexus by naming a service, an operation, and an input. You
 can build that input by hand as JSON, but a typed client is easier: your editor knows the fields,
 and a bad request fails in your code, with the field named, before it is sent.
 
 ## The contract
 
-The Connector's operations are defined in one file, [`http.nexusrpc.yaml`](../http.nexusrpc.yaml),
+The Outbound Connector's operations are defined in one file, [`http.nexusrpc.yaml`](../http.nexusrpc.yaml),
 its *contract*. It names the service (`HTTPService`), its operation (`request`), and the input
 and output types as JSON Schema. It is the source of truth for what a request may contain; the
-Connector rejects anything it doesn't allow.
+Outbound Connector rejects anything it doesn't allow.
 
 ## nexgen
 

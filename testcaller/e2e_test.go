@@ -26,7 +26,7 @@ import (
 
 const connectorNamespace = "connectors"
 
-// TestEndToEnd runs the Connector and the test caller in separate namespaces on a dev server, as
+// TestEndToEnd runs the Outbound Connector and the test caller in separate namespaces on a dev server, as
 // the README describes, and makes requests through the Nexus endpoint. It needs the temporal CLI
 // on the PATH.
 func TestEndToEnd(t *testing.T) {
@@ -142,7 +142,7 @@ func TestEndToEnd(t *testing.T) {
 		require.InDelta(t, 5*time.Second, times[1].Sub(times[0]), float64(time.Second))
 	})
 
-	t.Run("retries stop before the caller's timeout, with the Connector's error", func(t *testing.T) {
+	t.Run("retries stop before the caller's timeout, with the Outbound Connector's error", func(t *testing.T) {
 		var hits atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits.Add(1)
@@ -150,7 +150,7 @@ func TestEndToEnd(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		// The Connector retries for 25s - 10s margin = 15s: attempts at 0s and 5s, then the next
+		// The Outbound Connector retries for 25s - 10s margin = 15s: attempts at 0s and 5s, then the next
 		// 15s wait doesn't fit, so it fails with the last 503. Had it kept retrying, the caller
 		// would time out at 25s with no ApplicationError.
 		const timeout = 25 * time.Second
@@ -216,7 +216,7 @@ func TestEndToEnd(t *testing.T) {
 		defer srv.Close()
 		resp, err := call(t, httpapi.RequestInput{URL: srv.URL, APIKeyEnvVar: new(httpconnector.SecretEnvPrefix + "LOCAL")})
 		require.NoError(t, err)
-		// The server got the key; the Connector redacts it where the server echoes it back.
+		// The server got the key; the Outbound Connector redacts it where the server echoes it back.
 		require.Equal(t, "Bearer [REDACTED]", resp.Body)
 	})
 
@@ -246,6 +246,6 @@ func TestEndToEnd(t *testing.T) {
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
-		require.Contains(t, appErr.Message(), `domain "example.com" is not on the Connector's list of allowed domains`)
+		require.Contains(t, appErr.Message(), `domain "example.com" is not on the Outbound Connector's list of allowed domains`)
 	})
 }

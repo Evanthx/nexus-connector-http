@@ -14,7 +14,7 @@ import (
 // HTTP_CONNECTOR_SECRET_STRIPE_KEY may be sent only to the hosts in
 // HTTP_CONNECTOR_SECRET_STRIPE_KEY_DOMAINS, a list like AllowedDomainsEnvVar's, such as
 // "api.stripe.com" or "google.com, googleapis.com", or DisableAllowlist for any allowed host.
-// Every secret variable must have one, or the Connector doesn't start. A variable with this suffix is
+// Every secret variable must have one, or the Outbound Connector doesn't start. A variable with this suffix is
 // a list, never a secret.
 const SecretDomainsSuffix = "_DOMAINS"
 
@@ -50,7 +50,7 @@ func readSecretDomains(environ []string) (map[string][]string, error) {
 			continue
 		}
 		if !ok || strings.TrimSpace(v) == "" {
-			errs = append(errs, fmt.Errorf("%s needs %s: set it to the domains the secret may be sent to, such as \"api.example.com\", or to %q to allow any host the Connector may call",
+			errs = append(errs, fmt.Errorf("%s needs %s: set it to the domains the secret may be sent to, such as \"api.example.com\", or to %q to allow any host the Outbound Connector may call",
 				name, listVar, DisableAllowlist))
 			continue
 		}
@@ -77,7 +77,7 @@ func readSecretDomains(environ []string) (map[string][]string, error) {
 //
 // Redirects need no check of their own. A redirect is sent a secret only while it stays on the
 // original host or its subdomains, all of which are in the list since the original host is: the
-// Connector drops secret headers once a redirect leaves (see checkRedirect), http.Client drops the
+// Outbound Connector drops secret headers once a redirect leaves (see checkRedirect), http.Client drops the
 // Authorization header an apiKeyEnvVar key goes in, and a key in the query isn't carried over.
 func (a *HTTPActivities) CheckSecretDomains(req httpapi.RequestInput) error {
 	vars := requestSecretVars(req)
@@ -94,7 +94,7 @@ func (a *HTTPActivities) CheckSecretDomains(req httpapi.RequestInput) error {
 		domains, ok := a.secretDomains[name]
 		switch {
 		case !ok:
-			errs = append(errs, fmt.Errorf("%s has no %s on the Connector, so it isn't sent", name, name+SecretDomainsSuffix))
+			errs = append(errs, fmt.Errorf("%s has no %s on the Outbound Connector, so it isn't sent", name, name+SecretDomainsSuffix))
 		case !hostIn(host, domains):
 			errs = append(errs, fmt.Errorf("%s may not be sent to %q: it isn't in %s", name, host, name+SecretDomainsSuffix))
 		default: // the host is on the secret's list
@@ -104,9 +104,9 @@ func (a *HTTPActivities) CheckSecretDomains(req httpapi.RequestInput) error {
 }
 
 // CheckSecretsAllowed reports each domain in a secret's SecretDomainsSuffix list that the allowed
-// domains (AllowedDomainsEnvVar) don't hold: the Connector never calls it, so the secret is never
+// domains (AllowedDomainsEnvVar) don't hold: the Outbound Connector never calls it, so the secret is never
 // sent there, which usually means one of the two lists is wrong. With the allowlist disabled, or a
-// secret's list DisableAllowlist, there is nothing to report. The Connector starts either way; the
+// secret's list DisableAllowlist, there is nothing to report. The Outbound Connector starts either way; the
 // setup page's Test reports it. The error names variables and domains, never a value.
 func (a *HTTPActivities) CheckSecretsAllowed() error {
 	if a.domains == nil {
@@ -116,7 +116,7 @@ func (a *HTTPActivities) CheckSecretsAllowed() error {
 	for _, name := range slices.Sorted(maps.Keys(a.secretDomains)) {
 		for _, d := range a.secretDomains[name] {
 			if !hostIn(d, a.domains) {
-				errs = append(errs, fmt.Errorf("%s lists %q, which isn't within %s, so the Connector won't call it",
+				errs = append(errs, fmt.Errorf("%s lists %q, which isn't within %s, so the Outbound Connector won't call it",
 					name+SecretDomainsSuffix, d, AllowedDomainsEnvVar))
 			}
 		}

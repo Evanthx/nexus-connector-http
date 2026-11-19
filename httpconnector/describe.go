@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Describe is the Connector's setup as lines to log at startup: the allowed domains, or that the
+// Describe is the Outbound Connector's setup as lines to log at startup: the allowed domains, or that the
 // allowlist is disabled, then each secret variable and the hosts it may be sent to. It names
 // variables and domains, never a secret's value.
 func (a *HTTPActivities) Describe() []string {

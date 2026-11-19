@@ -9,7 +9,7 @@ import (
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 )
 
-// RateLimitMinutesEnvVar names the environment variable on the Connector that sets how
+// RateLimitMinutesEnvVar names the environment variable on the Outbound Connector that sets how
 // many minutes a key stays rate-limited after a 429. It must be a whole number, at least 1.
 const RateLimitMinutesEnvVar = "HTTP_CONNECTOR_RATE_LIMIT_MINUTES"
 
