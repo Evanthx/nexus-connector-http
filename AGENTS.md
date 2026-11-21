@@ -10,11 +10,13 @@ mistakes to avoid.
 http.nexusrpc.yaml          the contract (source of truth for the wire format)
 endpoint-description.md     the endpoint description shown in the Temporal UI
 cmd/outbound/                 the Outbound Connector's process
+codec/                      payload encryption (TEMPORAL_CODEC_ENDPOINT); the same in every Go connector repo
 httpconnector/              all connector logic; settings.go lists every environment variable
 settings/                   declaring and reading environment variables (the only code that reads them)
 configui/                   the setup page (make configui); gendocs/ writes docs/setup.md's tables
 generated/httpapi/          Go types generated from the contract — do not edit
-testcaller/                 test workflow, worker, starter, and end-to-end test
+testcaller/                 test workflow, worker, starter, and end-to-end tests
+test/encryption/            demo codec and codec server, for the encrypted test workflow
 docs/
   setup.md                  prerequisites, running locally, Temporal Cloud
   usage.md                  calling from Go and other languages, options, secrets
@@ -22,6 +24,8 @@ docs/
   testing.md                test workflow and test suites
   how-it-works.md           architecture, packages, path of a request, changing the contract
   troubleshooting.md        common errors and fixes
+  encryption.md             encrypting every payload with the user's codec (codec server or compiled
+                            in), what is and isn't encrypted, the encrypted test workflow
 ```
 
 ## What this is
@@ -149,6 +153,16 @@ policy (up to 10), except https → http, and except to a host outside
 redirect leaves the original host and its subdomains, headers filled from a secret are dropped,
 as Go drops `Authorization` and `Cookie`. Headers with literal values follow the redirect.
 
+## Encryption
+
+To keep data from reaching Temporal unencrypted, set `TEMPORAL_CODEC_ENDPOINT` (and
+`TEMPORAL_CODEC_AUTH` if needed) on the Outbound Connector to the user's payload codec server, or
+build it with a codec appended to `codec.PayloadCodecs` in an `init`. The callers' workers must use
+the same codec and keys. The Outbound Connector checks the codec at startup and waits for it. The
+HTTP API gets requests decrypted. Errors are encrypted too (details, message, stack trace; the type
+stays readable), so callers need the same failure converter to read them. `docs/encryption.md` has the setup, what is
+and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`, `go run ./test/encryption/codecserver`).
+
 ## Rules that break things when ignored
 
 - **The caller's Nexus timeout sets how long the Outbound Connector retries**: until `callbackMargin` (10s)
@@ -186,7 +200,8 @@ as Go drops `Authorization` and `Cookie`. Headers with literal values follow the
   (HTTP_CONNECTOR_ALLOWED_DOMAINS): ...`, or `Calls to any domain are allowed: the allowlist is
   disabled ...`), then one line per secret
   (`Secret HTTP_CONNECTOR_SECRET_STRIPE may be sent to: api.stripe.com`, or `any allowed domain` /
-  `any host` for `DISABLE ALLOWLIST`), or `Secrets: none`. It names variables, never values. Before that it checks every `HTTP_CONNECTOR_*` variable and the
+  `any host` for `DISABLE ALLOWLIST`), or `Secrets: none`, then `Payload codec: ...` (`none: ...`
+  unless `TEMPORAL_CODEC_ENDPOINT` is set; see Encryption). It names variables, never values. Before that it checks every `HTTP_CONNECTOR_*` variable and the
   connection to Temporal, and on any failure exits with one report listing all of them.
 - Run a request end to end with the test caller (namespace `http-testcaller`), in two more
   terminals:
@@ -358,7 +373,16 @@ request through the code.
 - Non-2xx errors carry the `RequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.
 - `cmd/outbound` — the Outbound Connector's process: `ClientOptions(settings.OS())`, `worker.New` on
-  `TaskQueue`, `Register`.
+  `TaskQueue`, `Register`, the setup lines and `Payload codec:` (`codec.Describe`), then
+  `codec.WaitAtStartup` before running the worker.
+- `codec/` (the same in every Go connector repo; copy it, don't change it in one) — `Apply(env,
+  &opts)`, called by `ClientOptions` after the namespace is final, wraps the data converter in
+  `PayloadCodecs` (compiled in) and a remote codec for `TEMPORAL_CODEC_ENDPOINT` or the profile's
+  codec section, with `X-Namespace` and `TEMPORAL_CODEC_AUTH`. Not envconfig's
+  `IncludeRemoteCodec`, which sends the namespace before the `connectors` default applies.
+  `WaitAtStartup` round-trips a test payload (`Check`) until it works, after the startup lines;
+  `Describe` is the `Payload codec:` line. `ErrUnchanged`: a codec that encodes nothing. It sets no
+  failure converter, so error details are not encoded.
 - `settings/` — the same in every Go connector repo. `Program` (sections of `Variable`s and
   `Family`s, plus cross-variable `Rules`), `Load(env)` (every problem at once), `Define`/`Typed`
   and `DefineFamily`/`TypedFamily` for typed values, `Env` (`OS()` or `Map`), and `Markdown` for
@@ -375,7 +399,12 @@ request through the code.
   (`describeProfile`, with envconfig's loader), and the Temporal check says which profile it read.
   configui must not make its own client (`ownclient_test.go`): its checks go through `NewWithEnv`.
 - `testcaller/` — test only: `CallerWorkflow(req, timeout)` (the Nexus operation timeout; 0 for
-  none), a worker, a starter, and the end-to-end test.
+  none), a worker, a starter, and the end-to-end tests. `ClientOptions` (worker and starter)
+  encrypts with the demo codec when `DEMO_ENCRYPTION_KEY` is set, in a block marked
+  `BEGIN ENCRYPTION (optional)` / `END ENCRYPTION (optional)`, plus an import marked
+  `ENCRYPTION (optional)`; deleting them leaves working code.
+- `test/encryption/` — test only: the demo AES-GCM codec (`DEMO_ENCRYPTION_KEY`) and `codecserver`
+  (`go run ./test/encryption/codecserver`, http://localhost:8089).
 
 ### Tests
 
@@ -401,4 +430,7 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
   short for one attempt rejected at start, a 404 `ClientError` with its response, an
   `InvalidRequest`, a domain not allowed, and a secret sent outside its `_DOMAINS` list, all
   rejected at start, and a secret sent within its list. It sets the allowed domains to
-  `127.0.0.1`.
+  `127.0.0.1`. `startDevServer` does the setup both tests share. `TestEndToEnd_EncryptedRequest`
+  gives the Outbound Connector's client `codec.Apply` with `codecServer` (an `httptest` server for
+  the demo codec) and the caller `withDemoCodec`, then checks with `requireEncrypted` that the Nexus
+  operation's and the activity's input and result are stored encrypted.

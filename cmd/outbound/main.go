@@ -3,13 +3,20 @@
 //
 // It connects with the standard Temporal client configuration: the TEMPORAL_* environment
 // variables and the profile file the temporal CLI uses. The namespace defaults to
-// connectors. Every variable it reads is listed in httpconnector.Settings.
+// connectors. Every variable it reads is listed in httpconnector.Settings. With a payload codec
+// set (TEMPORAL_CODEC_ENDPOINT), it checks the codec works before serving: see docs/encryption.md.
 package main
 
 import (
+	"context"
 	"log"
+	"log/slog"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
+	"github.com/temporalio/nexus-connector-http/codec"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
 	"github.com/temporalio/nexus-connector-http/settings"
 	"go.temporal.io/sdk/client"
@@ -20,11 +27,12 @@ func main() {
 	// Check the Outbound Connector's configuration and the connection to Temporal before stopping on
 	// either, so one run reports every problem rather than only the first.
 	var problems []string
+	env := settings.OS()
 	connector, err := httpconnector.New()
 	if err != nil {
 		problems = append(problems, "Invalid Outbound Connector configuration:\n"+indent(err.Error()))
 	}
-	opts, err := httpconnector.ClientOptions(settings.OS())
+	opts, err := httpconnector.ClientOptions(env)
 	if err != nil {
 		problems = append(problems, "Failed to load Temporal client configuration:\n"+indent(err.Error()))
 	}
@@ -50,6 +58,16 @@ func main() {
 
 	for _, line := range connector.Describe() {
 		log.Print(line)
+	}
+	log.Printf("Payload codec: %s", codec.Describe(env))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := codec.WaitAtStartup(ctx, env, opts.DataConverter, slog.Default()); err != nil {
+		if ctx.Err() != nil {
+			log.Print("Stopped while waiting for the payload codec")
+			return
+		}
+		log.Fatal(err)
 	}
 	log.Printf("Starting worker on namespace %q, task queue %q", opts.Namespace, httpconnector.TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {

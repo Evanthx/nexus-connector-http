@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/temporalio/nexus-connector-http/codec"
 	"github.com/temporalio/nexus-connector-http/settings"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/envconfig"
@@ -149,7 +150,8 @@ const defaultNamespace = "connectors"
 
 // ClientOptions loads the Temporal client options from env with the SDK's envconfig, as the
 // temporal CLI does (TEMPORAL_* variables and the CLI's profile file), with the namespace
-// defaulting to connectors.
+// defaulting to connectors. With a payload codec set (TEMPORAL_CODEC_ENDPOINT, or codecs compiled
+// in), every payload goes through it: see the codec package.
 func ClientOptions(env settings.Env) (client.Options, error) {
 	opts, err := envconfig.LoadClientOptions(envconfig.LoadClientOptionsRequest{EnvLookup: env})
 	if err != nil {
@@ -157,6 +159,11 @@ func ClientOptions(env settings.Env) (client.Options, error) {
 	}
 	if opts.Namespace == "" {
 		opts.Namespace = defaultNamespace
+	}
+	// Encode every payload with the user's codec, if any (TEMPORAL_CODEC_ENDPOINT, or codecs
+	// compiled in). After the namespace is final: the codec server is told it.
+	if _, err := codec.Apply(env, &opts); err != nil {
+		return client.Options{}, err
 	}
 	return opts, nil
 }

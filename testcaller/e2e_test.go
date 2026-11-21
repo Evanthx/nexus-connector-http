@@ -13,12 +13,19 @@ import (
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
+	"github.com/temporalio/nexus-connector-http/codec"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
+	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/test/encryption"
 	"github.com/temporalio/nexus-connector-http/testcaller"
+	commonpb "go.temporal.io/api/common/v1"
+	historypb "go.temporal.io/api/history/v1"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/operatorservice/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
@@ -30,39 +37,11 @@ const connectorNamespace = "connectors"
 // the README describes, and makes requests through the Nexus endpoint. It needs the temporal CLI
 // on the PATH.
 func TestEndToEnd(t *testing.T) {
-	if testing.Short() {
-		t.Skip("starts a dev server")
-	}
-	cli, err := exec.LookPath("temporal")
-	if err != nil {
-		t.Skip("the temporal CLI is not on the PATH")
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-
-	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{
-		ExistingPath:  cli,
-		ClientOptions: &client.Options{Namespace: connectorNamespace},
-		ExtraArgs: []string{
-			"--namespace", testcaller.Namespace,
-			"--dynamic-config-value", "activity.enableCallbacks=true",
-		},
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = server.Stop() })
+	server := startDevServer(ctx, t)
 
 	connectorClient := server.Client()
-	_, err = connectorClient.OperatorService().CreateNexusEndpoint(ctx, &operatorservice.CreateNexusEndpointRequest{
-		Spec: &nexuspb.EndpointSpec{
-			Name: testcaller.EndpointName,
-			Target: &nexuspb.EndpointTarget{Variant: &nexuspb.EndpointTarget_Worker_{Worker: &nexuspb.EndpointTarget_Worker{
-				Namespace: connectorNamespace,
-				TaskQueue: httpconnector.TaskQueue,
-			}}},
-		},
-	})
-	require.NoError(t, err)
 
 	// The httptest servers listen on 127.0.0.1, so only they are allowed.
 	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1")
@@ -248,4 +227,179 @@ func TestEndToEnd(t *testing.T) {
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
 		require.Contains(t, appErr.Message(), `domain "example.com" is not on the Outbound Connector's list of allowed domains`)
 	})
+}
+
+// startDevServer starts a dev server with the temporal CLI, with the Outbound Connector's namespace
+// and the test caller's, and creates the endpoint to the Outbound Connector's task queue. It skips
+// the test with -short or without the CLI on the PATH.
+func startDevServer(ctx context.Context, t *testing.T) *testsuite.DevServer {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("starts a dev server")
+	}
+	cli, err := exec.LookPath("temporal")
+	if err != nil {
+		t.Skip("the temporal CLI is not on the PATH")
+	}
+	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{
+		ExistingPath:  cli,
+		ClientOptions: &client.Options{Namespace: connectorNamespace},
+		ExtraArgs: []string{
+			"--namespace", testcaller.Namespace,
+			"--dynamic-config-value", "activity.enableCallbacks=true",
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = server.Stop() })
+
+	_, err = server.Client().OperatorService().CreateNexusEndpoint(ctx, &operatorservice.CreateNexusEndpointRequest{
+		Spec: &nexuspb.EndpointSpec{
+			Name: testcaller.EndpointName,
+			Target: &nexuspb.EndpointTarget{Variant: &nexuspb.EndpointTarget_Worker_{Worker: &nexuspb.EndpointTarget_Worker{
+				Namespace: connectorNamespace,
+				TaskQueue: httpconnector.TaskQueue,
+			}}},
+		},
+	})
+	require.NoError(t, err)
+	return server
+}
+
+// TestEndToEnd_EncryptedRequest runs the Outbound Connector with a payload codec server set, as
+// ClientOptions applies TEMPORAL_CODEC_ENDPOINT, and the test caller encrypting with the same key,
+// as the demo does with DEMO_ENCRYPTION_KEY. The request works, and Temporal holds only ciphertext.
+func TestEndToEnd_EncryptedRequest(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	server := startDevServer(ctx, t)
+	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1")
+
+	// The Outbound Connector, with the codec server set as it would be in its environment.
+	opts := client.Options{Namespace: connectorNamespace}
+	_, err := codec.Apply(codecServer(t), &opts)
+	require.NoError(t, err)
+	connectorClient, err := client.NewClientFromExisting(server.Client(), opts)
+	require.NoError(t, err)
+	t.Cleanup(connectorClient.Close)
+	connectorWorker := worker.New(connectorClient, httpconnector.TaskQueue, worker.Options{})
+	require.NoError(t, httpconnector.Register(connectorWorker))
+	require.NoError(t, connectorWorker.Start())
+	t.Cleanup(connectorWorker.Stop)
+
+	// The caller, encrypting with the same key.
+	callerClient := withDemoCodec(t, server.Client(), testcaller.Namespace)
+	callerWorker := worker.New(callerClient, testcaller.TaskQueue, worker.Options{})
+	callerWorker.RegisterWorkflow(testcaller.CallerWorkflow)
+	require.NoError(t, callerWorker.Start())
+	t.Cleanup(callerWorker.Stop)
+
+	const body, reply, errorBody = "plaintext request body", "plaintext response body", "plaintext error body"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/missing" {
+			http.Error(w, errorBody, http.StatusNotFound)
+			return
+		}
+		got, _ := io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, reply+" to "+string(got))
+	}))
+	defer srv.Close()
+	run, err := callerClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: testcaller.TaskQueue},
+		testcaller.CallerWorkflow, httpapi.RequestInput{URL: srv.URL, Method: new(httpapi.RequestInputMethodPost), Body: new(body)}, time.Duration(0))
+	require.NoError(t, err)
+	var resp httpapi.RequestOutput
+	require.NoError(t, run.Get(ctx, &resp))
+	require.Equal(t, reply+" to "+body, resp.Body)
+
+	// In Temporal, the Nexus operation's input and result are ciphertext.
+	history := callerClient.GetWorkflowHistory(ctx, run.GetID(), run.GetRunID(), false, 0)
+	var scheduled *historypb.NexusOperationScheduledEventAttributes
+	var completed *historypb.NexusOperationCompletedEventAttributes
+	for history.HasNext() {
+		event, err := history.Next()
+		require.NoError(t, err)
+		if a := event.GetNexusOperationScheduledEventAttributes(); a != nil {
+			scheduled = a
+		}
+		if a := event.GetNexusOperationCompletedEventAttributes(); a != nil {
+			completed = a
+		}
+	}
+	require.NotNil(t, scheduled, "no Nexus operation in the caller's history")
+	requireEncrypted(t, scheduled.GetInput(), body)
+	require.NotNil(t, completed, "the Nexus operation didn't complete")
+	requireEncrypted(t, completed.GetResult(), reply)
+
+	// So are the standalone activity's, whose ID comes from the Nexus request ID.
+	activity, err := server.Client().WorkflowService().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
+		Namespace: connectorNamespace, ActivityId: "http-" + scheduled.GetRequestId(), IncludeInput: true, IncludeOutcome: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, activity.GetInput().GetPayloads(), 1)
+	requireEncrypted(t, activity.GetInput().GetPayloads()[0], body)
+	require.Len(t, activity.GetOutcome().GetResult().GetPayloads(), 1)
+	requireEncrypted(t, activity.GetOutcome().GetResult().GetPayloads()[0], reply)
+
+	// A failed request's error is ciphertext too: its details (status, headers, body) and its
+	// message, which names the URL. The caller, with the same codec, reads the message.
+	run, err = callerClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: testcaller.TaskQueue},
+		testcaller.CallerWorkflow, httpapi.RequestInput{URL: srv.URL + "/missing"}, time.Duration(0))
+	require.NoError(t, err)
+	runErr := run.Get(ctx, nil)
+	require.ErrorContains(t, runErr, "/missing", "the caller reads the decrypted message")
+	history = callerClient.GetWorkflowHistory(ctx, run.GetID(), run.GetRunID(), false, 0)
+	var details []*commonpb.Payload
+	appFailures := 0
+	for history.HasNext() {
+		event, err := history.Next()
+		require.NoError(t, err)
+		for f := event.GetNexusOperationFailedEventAttributes().GetFailure(); f != nil; f = f.GetCause() {
+			if f.GetApplicationFailureInfo() == nil {
+				continue
+			}
+			appFailures++
+			require.Equal(t, "Encoded failure", f.GetMessage(), "the error message is stored in plaintext")
+			requireEncrypted(t, f.GetEncodedAttributes(), "/missing")
+			details = append(details, f.GetApplicationFailureInfo().GetDetails().GetPayloads()...)
+		}
+	}
+	require.Positive(t, appFailures, "the failed operation has no application error")
+	require.NotEmpty(t, details, "the failed operation's error has no details")
+	for _, d := range details {
+		requireEncrypted(t, d, errorBody)
+	}
+}
+
+// codecPassphrase is the demo codec's passphrase in the encryption test.
+const codecPassphrase = "end-to-end test passphrase"
+
+// codecServer serves the demo codec (test/encryption) under codecPassphrase as a remote codec
+// server, and returns the environment that points a program at it.
+func codecServer(t *testing.T) settings.Map {
+	t.Helper()
+	c, err := encryption.NewCodec(codecPassphrase)
+	require.NoError(t, err)
+	server := httptest.NewServer(converter.NewPayloadCodecHTTPHandler(c))
+	t.Cleanup(server.Close)
+	return settings.Map{"TEMPORAL_CODEC_ENDPOINT": server.URL, "TEMPORAL_CONFIG_FILE": t.TempDir() + "/none.toml"}
+}
+
+// withDemoCodec is a client sharing c's connection whose payloads go through the demo codec under
+// codecPassphrase, as the test caller's with DEMO_ENCRYPTION_KEY set.
+func withDemoCodec(t *testing.T, c client.Client, namespace string) client.Client {
+	t.Helper()
+	dc, err := encryption.DataConverter(codecPassphrase)
+	require.NoError(t, err)
+	out, err := client.NewClientFromExisting(c, client.Options{Namespace: namespace, DataConverter: dc, FailureConverter: encryption.FailureConverter(dc)})
+	require.NoError(t, err)
+	t.Cleanup(out.Close)
+	return out
+}
+
+// requireEncrypted fails the test unless payload is the demo codec's ciphertext, without
+// plaintext in it.
+func requireEncrypted(t *testing.T, payload *commonpb.Payload, plaintext string) {
+	t.Helper()
+	require.NotNil(t, payload)
+	require.Equal(t, "binary/encrypted", string(payload.GetMetadata()["encoding"]), "the payload in Temporal is not encrypted")
+	require.NotContains(t, string(payload.GetData()), plaintext)
 }

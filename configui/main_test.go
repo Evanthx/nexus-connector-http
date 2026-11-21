@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/temporalio/nexus-connector-http/codec"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
 	"github.com/temporalio/nexus-connector-http/settings"
 	nexuspb "go.temporal.io/api/nexus/v1"
@@ -151,7 +152,7 @@ func TestSettings_JSON(t *testing.T) {
 	}, page.Values)
 	require.Equal(t, map[string]bool{
 		stripe: true, httpconnector.SecretEnvPrefix + "ORPHAN": false, "TEMPORAL_API_KEY": true,
-		"TEMPORAL_TLS_CLIENT_KEY_DATA": false,
+		"TEMPORAL_CODEC_AUTH": false, "TEMPORAL_TLS_CLIENT_KEY_DATA": false,
 	}, page.SecretsSet)
 
 	// External variables: read-only, as Go reads them, masked, and never among the values the page
@@ -209,8 +210,8 @@ func TestTemporalSection_ListsWhatEnvconfigReads(t *testing.T) {
 		require.NotEmpty(t, value, name)
 		require.True(t, httpconnector.Settings.Owns(name), "%s isn't in the Temporal section", name)
 	}
-	// Every variable envconfig's ApplyEnvVars reads, but TEMPORAL_CODEC_*, which do nothing without a
-	// remote codec, and TEMPORAL_PROFILE and TEMPORAL_CONFIG_FILE, which choose the profile.
+	// Every variable envconfig's ApplyEnvVars reads, but TEMPORAL_CODEC_*, which the codec package
+	// reads (checked below), and TEMPORAL_PROFILE and TEMPORAL_CONFIG_FILE, which choose the profile.
 	for _, name := range []string{
 		"TEMPORAL_ADDRESS", "TEMPORAL_NAMESPACE", "TEMPORAL_API_KEY", "TEMPORAL_CLIENT_AUTHORITY", "TEMPORAL_TLS",
 		"TEMPORAL_TLS_CLIENT_CERT_PATH", "TEMPORAL_TLS_CLIENT_CERT_DATA", "TEMPORAL_TLS_CLIENT_KEY_PATH",
@@ -222,7 +223,9 @@ func TestTemporalSection_ListsWhatEnvconfigReads(t *testing.T) {
 	}
 	require.True(t, names["TEMPORAL_PROFILE"])
 	require.True(t, names["TEMPORAL_CONFIG_FILE"])
-	for _, secret := range []string{"TEMPORAL_API_KEY", "TEMPORAL_TLS_CLIENT_KEY_DATA", "TEMPORAL_GRPC_META_X_TENANT"} {
+	require.True(t, names[codec.EndpointEnvVar])
+	require.True(t, names[codec.AuthEnvVar])
+	for _, secret := range []string{"TEMPORAL_API_KEY", "TEMPORAL_TLS_CLIENT_KEY_DATA", "TEMPORAL_GRPC_META_X_TENANT", codec.AuthEnvVar} {
 		require.True(t, httpconnector.Settings.IsSecret(secret), secret)
 	}
 }

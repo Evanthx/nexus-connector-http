@@ -23,10 +23,12 @@ There is no workflow on the Outbound Connector's side. The Nexus operation valid
 |---|---|
 | `httpconnector/` | All connector logic. `http.go`: `Register`, the Nexus operation, the `Request` activity, `ApplyStatus`, status classification, redaction. `request.go`: building an `*http.Request`, validation, API keys, the rate-limit key. `errors.go`: error types and retry delays. `ratelimiter.go`: the in-memory rate-limit cache. `allowlist.go`: domain allow-list. `redirect.go`: the redirect policy. `timeout.go`: schedule-to-close calculation. `settings.go`: every environment variable the Outbound Connector reads, with its help, default and check (`Settings`), which `New` loads through. |
 | `settings/` | Declaring and reading environment variables: `Program`, `Variable`, `Family` (such as each secret with its `_DOMAINS` list), `Env` (the process's or a map). The only code that reads the process's environment; a test fails if any other does. Also generates the tables in `docs/setup.md`. |
-| `cmd/outbound/` | The Outbound Connector's process: connects to Temporal, calls `httpconnector.Register`, runs the worker. |
+| `cmd/outbound/` | The Outbound Connector's process: connects to Temporal, calls `httpconnector.Register`, checks the payload codec, runs the worker. |
+| `codec/` | Encrypting payloads: adds the user's payload codec (`TEMPORAL_CODEC_ENDPOINT`, or codecs compiled in) to the Outbound Connector's Temporal client, and checks it at startup. The same in every Go connector repo. See [Encryption](encryption.md). |
 | `configui/` | The setup page (`make configui`): shows `httpconnector.Settings`, tests values without changing any environment, and lists the `export` lines. Not part of the Outbound Connector. `configui/gendocs` writes `docs/setup.md`'s tables (`make docs`). |
 | `generated/httpapi/` | Go types for the contract, generated from `http.nexusrpc.yaml` with [nexgen](https://github.com/temporalio/nexgen). Do not edit directly. |
-| `testcaller/` | Test only: `CallerWorkflow`, its worker (`worker/`), a starter (`starter/`), and the end-to-end test. |
+| `testcaller/` | Test only: `CallerWorkflow`, its worker (`worker/`), a starter (`starter/`), and the end-to-end tests. |
+| `test/encryption/` | Test only: a demo codec and codec server, for the encrypted test workflow. |
 
 At the top level, `http.nexusrpc.yaml` is the contract and `endpoint-description.md` is the endpoint description shown in the Temporal UI.
 

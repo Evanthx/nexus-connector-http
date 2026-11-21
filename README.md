@@ -105,6 +105,12 @@ stop just before your operation's timeout. See [Errors, timeouts, and rate limit
 Yes, and by default it must: `HTTP_CONNECTOR_ALLOWED_DOMAINS` is required and lists the domains it
 may call. Set it to `DISABLE ALLOWLIST` to allow any host. See [Allowed domains](docs/usage.md#allowed-domains).
 
+**Can my data reach Temporal only encrypted?**
+Yes. Set `TEMPORAL_CODEC_ENDPOINT` to your payload codec server on the Outbound Connector, or
+build it with your codec, and each request, response and error is encrypted before it leaves the
+process. Your own workers use the same codec. The HTTP API gets the request decrypted. See
+[Encryption](docs/encryption.md).
+
 ## Documentation
 
 - [Setup](docs/setup.md): prerequisites, starting Temporal, creating the Nexus endpoint, running the
@@ -119,6 +125,8 @@ may call. Set it to `DISABLE ALLOWLIST` to allow any host. See [Allowed domains]
 - [Errors, timeouts, and rate limiting](docs/errors.md): error types, reading error details,
   timeouts, rate limiting, and known limitations.
 - [Testing](docs/testing.md): running the test workflow and the test suites.
+- [Encryption](docs/encryption.md): encrypting every payload so data reaches Temporal only
+  encrypted, with your codec server or a codec compiled in, and trying it with the test workflow.
 - [How it works](docs/how-it-works.md): architecture, the path of a request through the code,
   changing the contract, and APIs that don't follow the standard.
 - [Troubleshooting](docs/troubleshooting.md): common problems, their causes, and fixes.
