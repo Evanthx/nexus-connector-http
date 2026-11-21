@@ -5,8 +5,8 @@ reads, so your requests and responses reach Temporal, and Temporal Cloud, only e
 **payload codec**, the standard Temporal mechanism: the same codec your own workers use, and the
 same codec server the Temporal UI uses to show payloads decrypted.
 
-With no codec set, payloads go to Temporal as they are. The startup log's `Payload codec:` line
-says which.
+With no codec set, payloads go to Temporal as they are. The `payload codec` line in the startup
+report's Temporal section says which.
 
 ## How it fits together
 
@@ -48,7 +48,7 @@ The Outbound Connector sends each payload to `<endpoint>/encode` and `<endpoint>
 `X-Namespace` header set to its namespace, as the UI and CLI do, so a codec server that picks keys
 by namespace works unchanged. The Outbound Connector holds no keys.
 
-At startup, after logging its setup, the Outbound Connector encrypts a test payload and decrypts it
+At startup, after logging its startup report, the Outbound Connector encrypts a test payload and decrypts it
 again:
 
 ```
@@ -71,7 +71,7 @@ close to the Outbound Connector.
 ### With a codec compiled in
 
 If you would rather not run a codec server, build the Outbound Connector with your codec. Add a
-file to the `codec` package, such as `codec/mycodec.go`:
+file to the `codec` package, such as `nexus-connector-shared/codec/mycodec.go`:
 
 ```go
 package codec
@@ -108,9 +108,9 @@ stays in the Outbound Connector's environment (see
 ## Try it in the demo
 
 The test workflow ([Testing](testing.md#test-workflow)) can run encrypted end to end. It uses a demo
-codec, AES-256-GCM with a key derived from a passphrase (`test/encryption`), and a demo codec server
-that serves it (`test/encryption/codecserver`). They are for the demo only: a real codec gets its
-keys from a key management service.
+codec, AES-256-GCM with a key derived from a passphrase (`nexus-connector-shared/test/encryption`),
+and a demo codec server that serves it (`nexus-connector-shared/test/encryption/codecserver`). They
+are for the demo only: a real codec gets its keys from a key management service.
 
 1. Pick a passphrase and use it in every terminal below:
 
@@ -121,7 +121,7 @@ keys from a key management service.
 2. Start the demo codec server (its own terminal):
 
    ```bash
-   go run ./test/encryption/codecserver     # serves http://localhost:8089
+   go run ./nexus-connector-shared/test/encryption/codecserver     # serves http://localhost:8089
    ```
 
 3. Start Temporal with the UI using it ([Setup](setup.md#1-start-temporal) step 1, with one more

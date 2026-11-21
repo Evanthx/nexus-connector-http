@@ -6,10 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/temporalio/nexus-connector-http/codec"
-	"github.com/temporalio/nexus-connector-http/settings"
-	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/envconfig"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/temporalclient"
 )
 
 // This file lists every environment variable the Outbound Connector reads, in the order the setup page
@@ -30,9 +28,9 @@ var Settings = &settings.Program{
 			maxDurationSetting.Variable,
 		}},
 		settings.Temporal{
-			Namespace: defaultNamespace,
+			Namespace: temporalclient.DefaultNamespace,
 			NamespaceHelp: "The namespace the Outbound Connector runs in. The Nexus endpoint must target it and the task queue " +
-				"`" + TaskQueue + "`. All connectors default to `" + defaultNamespace + "` and are kept apart by task queue.",
+				"`" + TaskQueue + "`. All connectors default to `" + temporalclient.DefaultNamespace + "` and are kept apart by task queue.",
 			Docs: "See [Connecting to Temporal Cloud or another server](#connecting-to-temporal-cloud-or-another-server).",
 		}.Section(),
 		{Title: "Network", Variables: proxyVariables},
@@ -142,30 +140,6 @@ var proxyVariables = []*settings.Variable{
 			"list of domains (each with its subdomains; with a leading `.`, subdomains only), IP addresses or CIDR " +
 			"ranges, each optionally with a port, or `*` for every host.",
 	},
-}
-
-// defaultNamespace is the Outbound Connector's namespace when neither TEMPORAL_NAMESPACE nor the profile
-// file sets one.
-const defaultNamespace = "connectors"
-
-// ClientOptions loads the Temporal client options from env with the SDK's envconfig, as the
-// temporal CLI does (TEMPORAL_* variables and the CLI's profile file), with the namespace
-// defaulting to connectors. With a payload codec set (TEMPORAL_CODEC_ENDPOINT, or codecs compiled
-// in), every payload goes through it: see the codec package.
-func ClientOptions(env settings.Env) (client.Options, error) {
-	opts, err := envconfig.LoadClientOptions(envconfig.LoadClientOptionsRequest{EnvLookup: env})
-	if err != nil {
-		return client.Options{}, err
-	}
-	if opts.Namespace == "" {
-		opts.Namespace = defaultNamespace
-	}
-	// Encode every payload with the user's codec, if any (TEMPORAL_CODEC_ENDPOINT, or codecs
-	// compiled in). After the namespace is final: the codec server is told it.
-	if _, err := codec.Apply(env, &opts); err != nil {
-		return client.Options{}, err
-	}
-	return opts, nil
 }
 
 // parseAllowedDomains reads AllowedDomainsEnvVar's value, v: the domains, lower case and without

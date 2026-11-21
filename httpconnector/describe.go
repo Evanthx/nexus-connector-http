@@ -5,7 +5,35 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/report"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/temporalclient"
+	"go.temporal.io/sdk/client"
 )
+
+// Report is the Outbound Connector's configuration and what it will do with it, for the log when
+// it starts: its settings, defaults marked, the Temporal connection (temporal, the client options
+// it connects with), then what it serves and Describe's lines. It names secret variables, never
+// their values.
+func (a *HTTPActivities) Report(temporal client.Options) string {
+	domains := DisableAllowlist
+	if a.domains != nil {
+		domains = strings.Join(a.domains, ", ")
+	}
+	sections := []report.Section{
+		{Title: "Allowed hosts", Settings: []report.Setting{{Name: AllowedDomainsEnvVar, Value: domains}}},
+		{Title: "Requests", Settings: []report.Setting{
+			report.Env(a.env, AllowRedirectsEnvVar, a.allowRedirects),
+			report.Env(a.env, AttemptTimeoutEnvVar, a.attemptTimeout),
+			report.Env(a.env, RateLimitMinutesEnvVar, a.lim.ttl),
+			report.Env(a.env, MaxDurationEnvVar, a.maxTotal),
+		}},
+		temporalclient.Section(a.env, temporal),
+	}
+	behavior := append([]string{fmt.Sprintf("Serve the HTTPService Nexus service, with the operation request, and run requests on "+
+		"the task queue %q: point the Outbound Connector's Nexus endpoint at it.", TaskQueue)}, a.Describe()...)
+	return report.Format("Outbound Connector", sections, behavior)
+}
 
 // Describe is the Outbound Connector's setup as lines to log at startup: the allowed domains, or that the
 // allowlist is disabled, then each secret variable and the hosts it may be sent to. It names

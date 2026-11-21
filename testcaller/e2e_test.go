@@ -13,11 +13,10 @@ import (
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
-	"github.com/temporalio/nexus-connector-http/codec"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
-	"github.com/temporalio/nexus-connector-http/settings"
-	"github.com/temporalio/nexus-connector-http/test/encryption"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/temporalclient"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/test/codectest"
 	"github.com/temporalio/nexus-connector-http/testcaller"
 	commonpb "go.temporal.io/api/common/v1"
 	historypb "go.temporal.io/api/history/v1"
@@ -25,7 +24,6 @@ import (
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
@@ -174,7 +172,8 @@ func TestEndToEnd(t *testing.T) {
 		var appErr *temporal.ApplicationError
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
-		require.Contains(t, appErr.Message(), "which leaves no time for an attempt: it needs at least one attempt (10s, "+httpconnector.AttemptTimeoutEnvVar+") plus 10s")
+		require.Contains(t, appErr.Message(), "which leaves no time for an attempt: it needs at least one attempt (10s) plus 10s")
+		require.Contains(t, appErr.Message(), "(one attempt's time is "+httpconnector.AttemptTimeoutEnvVar+")")
 	})
 
 	t.Run("invalid request fails when the operation starts", func(t *testing.T) {
@@ -266,7 +265,7 @@ func startDevServer(ctx context.Context, t *testing.T) *testsuite.DevServer {
 }
 
 // TestEndToEnd_EncryptedRequest runs the Outbound Connector with a payload codec server set, as
-// ClientOptions applies TEMPORAL_CODEC_ENDPOINT, and the test caller encrypting with the same key,
+// temporalclient.Options applies TEMPORAL_CODEC_ENDPOINT, and the test caller encrypting with the same key,
 // as the demo does with DEMO_ENCRYPTION_KEY. The request works, and Temporal holds only ciphertext.
 func TestEndToEnd_EncryptedRequest(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -274,10 +273,11 @@ func TestEndToEnd_EncryptedRequest(t *testing.T) {
 	server := startDevServer(ctx, t)
 	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1")
 
-	// The Outbound Connector, with the codec server set as it would be in its environment.
-	opts := client.Options{Namespace: connectorNamespace}
-	_, err := codec.Apply(codecServer(t), &opts)
+	// The Outbound Connector's client options, loaded as it loads them, with the codec server set
+	// as it would be in its environment.
+	opts, err := temporalclient.Options(codectest.Server(t))
 	require.NoError(t, err)
+	require.Equal(t, connectorNamespace, opts.Namespace)
 	connectorClient, err := client.NewClientFromExisting(server.Client(), opts)
 	require.NoError(t, err)
 	t.Cleanup(connectorClient.Close)
@@ -287,7 +287,7 @@ func TestEndToEnd_EncryptedRequest(t *testing.T) {
 	t.Cleanup(connectorWorker.Stop)
 
 	// The caller, encrypting with the same key.
-	callerClient := withDemoCodec(t, server.Client(), testcaller.Namespace)
+	callerClient := codectest.WithDemoCodec(t, server.Client(), testcaller.Namespace)
 	callerWorker := worker.New(callerClient, testcaller.TaskQueue, worker.Options{})
 	callerWorker.RegisterWorkflow(testcaller.CallerWorkflow)
 	require.NoError(t, callerWorker.Start())
@@ -325,9 +325,9 @@ func TestEndToEnd_EncryptedRequest(t *testing.T) {
 		}
 	}
 	require.NotNil(t, scheduled, "no Nexus operation in the caller's history")
-	requireEncrypted(t, scheduled.GetInput(), body)
+	codectest.RequireEncrypted(t, scheduled.GetInput(), body)
 	require.NotNil(t, completed, "the Nexus operation didn't complete")
-	requireEncrypted(t, completed.GetResult(), reply)
+	codectest.RequireEncrypted(t, completed.GetResult(), reply)
 
 	// So are the standalone activity's, whose ID comes from the Nexus request ID.
 	activity, err := server.Client().WorkflowService().DescribeActivityExecution(ctx, &workflowservice.DescribeActivityExecutionRequest{
@@ -335,9 +335,9 @@ func TestEndToEnd_EncryptedRequest(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, activity.GetInput().GetPayloads(), 1)
-	requireEncrypted(t, activity.GetInput().GetPayloads()[0], body)
+	codectest.RequireEncrypted(t, activity.GetInput().GetPayloads()[0], body)
 	require.Len(t, activity.GetOutcome().GetResult().GetPayloads(), 1)
-	requireEncrypted(t, activity.GetOutcome().GetResult().GetPayloads()[0], reply)
+	codectest.RequireEncrypted(t, activity.GetOutcome().GetResult().GetPayloads()[0], reply)
 
 	// A failed request's error is ciphertext too: its details (status, headers, body) and its
 	// message, which names the URL. The caller, with the same codec, reads the message.
@@ -358,48 +358,13 @@ func TestEndToEnd_EncryptedRequest(t *testing.T) {
 			}
 			appFailures++
 			require.Equal(t, "Encoded failure", f.GetMessage(), "the error message is stored in plaintext")
-			requireEncrypted(t, f.GetEncodedAttributes(), "/missing")
+			codectest.RequireEncrypted(t, f.GetEncodedAttributes(), "/missing")
 			details = append(details, f.GetApplicationFailureInfo().GetDetails().GetPayloads()...)
 		}
 	}
 	require.Positive(t, appFailures, "the failed operation has no application error")
 	require.NotEmpty(t, details, "the failed operation's error has no details")
 	for _, d := range details {
-		requireEncrypted(t, d, errorBody)
+		codectest.RequireEncrypted(t, d, errorBody)
 	}
-}
-
-// codecPassphrase is the demo codec's passphrase in the encryption test.
-const codecPassphrase = "end-to-end test passphrase"
-
-// codecServer serves the demo codec (test/encryption) under codecPassphrase as a remote codec
-// server, and returns the environment that points a program at it.
-func codecServer(t *testing.T) settings.Map {
-	t.Helper()
-	c, err := encryption.NewCodec(codecPassphrase)
-	require.NoError(t, err)
-	server := httptest.NewServer(converter.NewPayloadCodecHTTPHandler(c))
-	t.Cleanup(server.Close)
-	return settings.Map{"TEMPORAL_CODEC_ENDPOINT": server.URL, "TEMPORAL_CONFIG_FILE": t.TempDir() + "/none.toml"}
-}
-
-// withDemoCodec is a client sharing c's connection whose payloads go through the demo codec under
-// codecPassphrase, as the test caller's with DEMO_ENCRYPTION_KEY set.
-func withDemoCodec(t *testing.T, c client.Client, namespace string) client.Client {
-	t.Helper()
-	dc, err := encryption.DataConverter(codecPassphrase)
-	require.NoError(t, err)
-	out, err := client.NewClientFromExisting(c, client.Options{Namespace: namespace, DataConverter: dc, FailureConverter: encryption.FailureConverter(dc)})
-	require.NoError(t, err)
-	t.Cleanup(out.Close)
-	return out
-}
-
-// requireEncrypted fails the test unless payload is the demo codec's ciphertext, without
-// plaintext in it.
-func requireEncrypted(t *testing.T, payload *commonpb.Payload, plaintext string) {
-	t.Helper()
-	require.NotNil(t, payload)
-	require.Equal(t, "binary/encrypted", string(payload.GetMetadata()["encoding"]), "the payload in Temporal is not encrypted")
-	require.NotContains(t, string(payload.GetData()), plaintext)
 }

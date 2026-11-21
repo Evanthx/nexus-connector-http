@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
-	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 	"golang.org/x/net/http/httpguts"
 )
 

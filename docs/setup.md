@@ -48,15 +48,45 @@ export HTTP_CONNECTOR_SECRET_WEATHER_DOMAINS=api.weatherapi.com   # each with th
 go run ./cmd/outbound
 ```
 
-The Outbound Connector logs what it will allow, then `Starting worker on namespace "connectors", task queue "nexus-connector-http"`:
+The Outbound Connector logs its configuration and what it will do, then `Starting worker on
+namespace "connectors", task queue "nexus-connector-http"`:
 
 ```
-Only calls to these domains are allowed (HTTP_CONNECTOR_ALLOWED_DOMAINS): api.weatherapi.com, httpbin.org
-Secret HTTP_CONNECTOR_SECRET_WEATHER may be sent to: api.weatherapi.com
+Outbound Connector configuration (values marked "default" come from variables that aren't set):
+  Allowed hosts
+    HTTP_CONNECTOR_ALLOWED_DOMAINS          api.weatherapi.com, httpbin.org
+  Requests
+    HTTP_CONNECTOR_ALLOW_REDIRECTS          false (default)
+    HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS  1m0s (default)
+    HTTP_CONNECTOR_RATE_LIMIT_MINUTES       5m0s (default)
+    HTTP_CONNECTOR_MAX_DURATION_MINUTES     25h0m0s (default)
+  Temporal
+    namespace                               connectors (default)
+    address                                 localhost:7233 (default)
+    payload codec                           none: payloads go to Temporal as they are, unencrypted (set TEMPORAL_CODEC_ENDPOINT to encrypt them)
+What the Outbound Connector will do:
+  - Serve the HTTPService Nexus service, with the operation request, and run requests on the task queue "nexus-connector-http": point the Outbound Connector's Nexus endpoint at it.
+  - Only calls to these domains are allowed (HTTP_CONNECTOR_ALLOWED_DOMAINS): api.weatherapi.com, httpbin.org
+  - Secret HTTP_CONNECTOR_SECRET_WEATHER may be sent to: api.weatherapi.com
 Starting worker on namespace "connectors", task queue "nexus-connector-http"
 ```
 
-With the allowlist disabled, the first line is `Calls to any domain are allowed: the allowlist is disabled (HTTP_CONNECTOR_ALLOWED_DOMAINS is "DISABLE ALLOWLIST")`. A secret whose list is `DISABLE ALLOWLIST` may be sent to `any allowed domain`, or to `any host` when the allowlist is disabled too. With no secrets, the second line is `Secrets: none`. Only names and domains are logged, never a secret's value. Before that line, the Outbound Connector checks every `HTTP_CONNECTOR_*` variable and tries to connect to Temporal. If anything fails (such as a non-integer `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` and an unreachable server), it exits with one report listing every problem, so you can fix them all at once.
+With the allowlist disabled, the allowlist line is `Calls to any domain are allowed: the allowlist is
+disabled (HTTP_CONNECTOR_ALLOWED_DOMAINS is "DISABLE ALLOWLIST")`. A secret whose list is `DISABLE
+ALLOWLIST` may be sent to `any allowed domain`, or to `any host` when the allowlist is disabled too.
+With no secrets, the last line is `Secrets: none`. Only names and domains are logged, never a
+secret's value. Before the report, the Outbound Connector checks every `HTTP_CONNECTOR_*` variable
+and tries to connect to Temporal. If anything fails (such as a non-integer
+`HTTP_CONNECTOR_RATE_LIMIT_MINUTES` and an unreachable server), it exits with one report listing
+every problem, so you can fix them all at once:
+
+```
+The Outbound Connector can't start:
+Invalid Outbound Connector configuration:
+  - HTTP_CONNECTOR_RATE_LIMIT_MINUTES must be a whole number of minutes, at least 1; got "1.5"
+Failed to connect to Temporal:
+  - failed reaching server: ... connection refused
+```
 
 ## Environment variables
 

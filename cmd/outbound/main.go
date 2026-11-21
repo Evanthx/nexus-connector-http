@@ -3,51 +3,34 @@
 //
 // It connects with the standard Temporal client configuration: the TEMPORAL_* environment
 // variables and the profile file the temporal CLI uses. The namespace defaults to
-// connectors. Every variable it reads is listed in httpconnector.Settings. With a payload codec
-// set (TEMPORAL_CODEC_ENDPOINT), it checks the codec works before serving: see docs/encryption.md.
+// connectors. Every variable it reads is listed in httpconnector.Settings.
 package main
 
 import (
 	"context"
+	"errors"
 	"log"
-	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
-	"github.com/temporalio/nexus-connector-http/codec"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
-	"github.com/temporalio/nexus-connector-http/settings"
-	"go.temporal.io/sdk/client"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/startup"
 	"go.temporal.io/sdk/worker"
 )
 
 func main() {
-	// Check the Outbound Connector's configuration and the connection to Temporal before stopping on
-	// either, so one run reports every problem rather than only the first.
-	var problems []string
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	env := settings.OS()
-	connector, err := httpconnector.New()
-	if err != nil {
-		problems = append(problems, "Invalid Outbound Connector configuration:\n"+indent(err.Error()))
-	}
-	opts, err := httpconnector.ClientOptions(env)
-	if err != nil {
-		problems = append(problems, "Failed to load Temporal client configuration:\n"+indent(err.Error()))
-	}
-	var c client.Client
-	if err == nil {
-		c, err = client.Dial(opts)
-		if err != nil {
-			problems = append(problems, "Failed to connect to Temporal:\n"+indent(err.Error()))
-		}
-	}
-	if len(problems) > 0 {
-		if c != nil {
-			c.Close()
-		}
-		log.Fatalf("The Outbound Connector can't start:\n%s", strings.Join(problems, "\n"))
+	s := startup.New("Outbound Connector", env)
+	connector, err := httpconnector.NewWithEnv(env)
+	s.Config(err)
+	opts, c := s.Temporal()
+	if err := s.Problems(); err != nil {
+		log.Fatal(err)
 	}
 	defer c.Close()
 
@@ -56,15 +39,10 @@ func main() {
 		log.Fatalf("Failed to configure the Outbound Connector: %v", err)
 	}
 
-	for _, line := range connector.Describe() {
-		log.Print(line)
-	}
-	log.Printf("Payload codec: %s", codec.Describe(env))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := codec.WaitAtStartup(ctx, env, opts.DataConverter, slog.Default()); err != nil {
-		if ctx.Err() != nil {
-			log.Print("Stopped while waiting for the payload codec")
+	log.Print(connector.Report(opts))
+	if err := s.Ready(ctx); err != nil {
+		if errors.Is(err, startup.ErrStopped) {
+			log.Print("Stopped while starting")
 			return
 		}
 		log.Fatal(err)
@@ -73,9 +51,4 @@ func main() {
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		log.Fatalf("Worker exited with error: %v", err)
 	}
-}
-
-// indent prefixes each line of s with "  - ", one line per problem errors.Join reported.
-func indent(s string) string {
-	return "  - " + strings.ReplaceAll(s, "\n", "\n  - ")
 }

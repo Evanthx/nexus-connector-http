@@ -42,9 +42,9 @@ The caller's server sends the remaining operation time in the `operation-timeout
 A caller timeout that is too short for one attempt plus 10 seconds fails immediately with `InvalidRequest`:
 
 ```
-the caller's Nexus operation times out in 1m0s, which leaves no time for an attempt: it needs at
-least one attempt (1m0s, HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS) plus 10s for the result to reach
-the caller; give the operation a longer timeout
+invalid operation timeout: the caller's Nexus operation times out in 1m0s, which leaves no time
+for an attempt: it needs at least one attempt (1m0s) plus 10s for the result to reach the caller;
+give the operation a longer timeout (one attempt's time is HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS)
 ```
 
 Cancelling a caller workflow cancels the Outbound Connector activity. Any attempt already in flight finishes, but no further attempts are made.

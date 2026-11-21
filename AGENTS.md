@@ -9,14 +9,14 @@ mistakes to avoid.
 ```
 http.nexusrpc.yaml          the contract (source of truth for the wire format)
 endpoint-description.md     the endpoint description shown in the Temporal UI
-cmd/outbound/                 the Outbound Connector's process
-codec/                      payload encryption (TEMPORAL_CODEC_ENDPOINT); the same in every Go connector repo
+cmd/outbound/               the Outbound Connector's process
 httpconnector/              all connector logic; settings.go lists every environment variable
-settings/                   declaring and reading environment variables (the only code that reads them)
 configui/                   the setup page (make configui); gendocs/ writes docs/setup.md's tables
 generated/httpapi/          Go types generated from the contract — do not edit
 testcaller/                 test workflow, worker, starter, and end-to-end tests
-test/encryption/            demo codec and codec server, for the encrypted test workflow
+nexus-connector-shared/     code every Go connector shares (settings, Temporal client, encryption,
+                            startup, report, deadline, the setup page, demo codec); the same in every
+                            Go connector repo, synced, never edited here alone: see its README.md
 docs/
   setup.md                  prerequisites, running locally, Temporal Cloud
   usage.md                  calling from Go and other languages, options, secrets
@@ -161,18 +161,19 @@ build it with a codec appended to `codec.PayloadCodecs` in an `init`. The caller
 the same codec and keys. The Outbound Connector checks the codec at startup and waits for it. The
 HTTP API gets requests decrypted. Errors are encrypted too (details, message, stack trace; the type
 stays readable), so callers need the same failure converter to read them. `docs/encryption.md` has the setup, what is
-and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`, `go run ./test/encryption/codecserver`).
+and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`,
+`go run ./nexus-connector-shared/test/encryption/codecserver`).
 
 ## Rules that break things when ignored
 
-- **The caller's Nexus timeout sets how long the Outbound Connector retries**: until `callbackMargin` (10s)
-  before it, then the caller gets the Outbound Connector's last error, not a timeout. The Outbound Connector reads it
-  from the `operation-timeout` header, which the caller's server sets to the smaller of the
-  operation's remaining `ScheduleToCloseTimeout` and its `StartToCloseTimeout`. No header, or more
-  time than `HTTP_CONNECTOR_MAX_DURATION_MINUTES`, means the maximum. A timeout under
-  one attempt (`HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS`, 60s by default) + 10s fails at once with
-  `InvalidRequest`. Cancelling the caller's workflow
-  cancels the activity.
+- **The caller's Nexus timeout sets how long the Outbound Connector retries**: until
+  `deadline.CallbackMargin` (10s) before it, then the caller gets the Outbound Connector's last
+  error, not a timeout. The Outbound Connector reads it from the `operation-timeout` header, which
+  the caller's server sets to the smaller of the operation's remaining `ScheduleToCloseTimeout` and
+  its `StartToCloseTimeout`. No header, or more time than `HTTP_CONNECTOR_MAX_DURATION_MINUTES`,
+  means the maximum. A timeout under one attempt (`HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS`, 60s by
+  default) + 10s fails at once with `InvalidRequest`. Cancelling the caller's workflow cancels the
+  activity.
 - **Never put a secret in the request.** Name a `HTTP_CONNECTOR_SECRET_*` variable in
   `apiKeyEnvVar`, or as any header's whole value, such as `Authorization` or `X-Api-Key` (the
   variable then holds the whole header value, scheme included, e.g. `Bearer ...` or
@@ -195,14 +196,16 @@ and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`, `go run ./test/encrypt
 
 ## Check it is working
 
-- The Outbound Connector logs its setup, then `Starting worker on namespace "connectors", task queue
-  "nexus-connector-http"`. The setup is the allowlist (`Only calls to these domains are allowed
-  (HTTP_CONNECTOR_ALLOWED_DOMAINS): ...`, or `Calls to any domain are allowed: the allowlist is
-  disabled ...`), then one line per secret
-  (`Secret HTTP_CONNECTOR_SECRET_STRIPE may be sent to: api.stripe.com`, or `any allowed domain` /
-  `any host` for `DISABLE ALLOWLIST`), or `Secrets: none`, then `Payload codec: ...` (`none: ...`
-  unless `TEMPORAL_CODEC_ENDPOINT` is set; see Encryption). It names variables, never values. Before that it checks every `HTTP_CONNECTOR_*` variable and the
-  connection to Temporal, and on any failure exits with one report listing all of them.
+- The Outbound Connector logs a startup report, then `Starting worker on namespace "connectors",
+  task queue "nexus-connector-http"`. The report lists the settings (defaults marked), the
+  Temporal namespace, address and `payload codec` (`none: ...` unless `TEMPORAL_CODEC_ENDPOINT` is
+  set; see Encryption), then what it will do: serve the task queue, the allowlist (`Only calls to
+  these domains are allowed (HTTP_CONNECTOR_ALLOWED_DOMAINS): ...`, or `Calls to any domain are
+  allowed: the allowlist is disabled ...`), then one line per secret (`Secret
+  HTTP_CONNECTOR_SECRET_STRIPE may be sent to: api.stripe.com`, or `any allowed domain` / `any
+  host` for `DISABLE ALLOWLIST`), or `Secrets: none`. It names variables, never values. Before that
+  it checks every `HTTP_CONNECTOR_*` variable and the connection to Temporal, and on any failure
+  exits with one message, `The Outbound Connector can't start:`, listing all of them.
 - Run a request end to end with the test caller (namespace `http-testcaller`), in two more
   terminals:
 
@@ -271,14 +274,15 @@ go test -short ./...                                           # skip the end-to
   with its help, default, required and check, added to a section of `Settings`; read it with
   `.From(vals)` in `NewWithEnv`. Then run `make docs`; a test fails while docs/setup.md is stale.
   Never read the environment directly (`os.Getenv`, `os.LookupEnv`, `os.Environ`, ...): only
-  `settings/env.go` may, and `settings/nobypass_test.go` fails otherwise. A variable a library
-  reads from the process's environment itself (such as `HTTPS_PROXY`) is listed with `External`
-  (and `Aliases`, and `Mask` if part of it is secret); the setup page shows it read-only. Secrets a request names
-  are read through `secretsFamily.Lookup` from `HTTPActivities.env`.
+  `nexus-connector-shared/settings/env.go` may, and its `nobypass_test.go` fails otherwise. A
+  variable a library reads from the process's environment itself (such as `HTTPS_PROXY`) is listed
+  with `External` (and `Aliases`, and `Mask` if part of it is secret); the setup page shows it
+  read-only. Secrets a request names are read through `secretsFamily.Lookup` from
+  `HTTPActivities.env`.
 - Outside the package, `cmd/outbound` and `testcaller` use only `TaskQueue`, `Register`,
-  `ClientOptions`, the `ErrorType*` constants and `AllowedDomainsEnvVar`; `configui` uses
-  `Settings`, `NewWithEnv`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`, `Request`) and
-  `SecretEnvPrefix`. `New`, `ApplyStatus`,
+  `NewWithEnv`, `HTTPActivities.Report`, the `ErrorType*` constants and `AllowedDomainsEnvVar`;
+  `configui` uses `Settings`, `NewWithEnv`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`,
+  `Request`) and `SecretEnvPrefix`. `New`, `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
   `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AttemptTimeoutEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
@@ -291,6 +295,10 @@ go test -short ./...                                           # skip the end-to
   `redactResponse`. Any new way for a request to name a secret must be added to
   `requestSecretVars`, so `CheckSecretDomains` checks it against the secret's `_DOMAINS` list.
 - For a test that guards a fix, revert the fix and confirm the test fails before calling it done.
+- **`nexus-connector-shared/` is the same in every Go connector repo** (apart from the module path).
+  Change it only for something every connector needs, then copy it to the other repos with the
+  create-nexus-connector skill's `scripts/sync-shared.sh` and run `make ci` in each. Code about
+  HTTP never goes there. Its [README](nexus-connector-shared/README.md) lists the packages.
 
 ### How the code works
 
@@ -308,8 +316,8 @@ request through the code.
     functions that check them (`parseAllowedDomains`, `parseAllowRedirects`, `minutes`) and
     `secretsFamily` (`HTTP_CONNECTOR_SECRET_<NAME>` with `<NAME>_DOMAINS`, checked by
     `readSecretDomains`). `NewWithEnv(env)` loads them all with `Settings.Load`, which reports
-    every problem at once; `New()` is `NewWithEnv(settings.OS())`. `ClientOptions(env)` loads the
-    Temporal client options with envconfig from the same env, namespace defaulting to `connectors`.
+    every problem at once; `New()` is `NewWithEnv(settings.OS())`. The Temporal client options
+    come from `temporalclient.Options` in `nexus-connector-shared`.
   - The operation validates first (`build` with `a.env`, as `Validate` does, then `CheckDomain`, then `ScheduleToClose` from
     the `operation-timeout` header) and returns a `BadRequest` handler error (cause: an
     `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
@@ -334,9 +342,11 @@ request through the code.
     or trailing dot, exactly or as a subdomain at a dot boundary; an IP address, as entry or host,
     only exactly.
   - `timeout.go`: `MaxDurationEnvVar` (default 25h, read by `New()` into
-    `HTTPActivities.maxTotal`, exported as `MaxDuration()`; there is always a maximum), `callbackMargin` (10s), and
-    `ScheduleToClose(header)`: no header → the maximum; else header − margin, capped at the
-    maximum, or an error if under one attempt. The server rewrites the header at dispatch, so
+    `HTTPActivities.maxTotal`, exported as `MaxDuration()`; there is always a maximum), and
+    `ScheduleToClose(header)`, which is `deadline.ScheduleToClose` with the maximum and one attempt:
+    no header → the maximum; else header − `deadline.CallbackMargin` (10s), capped at the maximum,
+    or an error wrapping `deadline.ErrTooShort` if under one attempt, with a hint naming
+    `AttemptTimeoutEnvVar`. The server rewrites the header at dispatch, so
     queue time is already subtracted.
   - `ratelimiter.go`: the `limiter`, owned by `HTTPActivities`. A 429 marks the key; while marked,
     `Request` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
@@ -372,39 +382,38 @@ request through the code.
     header must be added to `secretHeaderVars` so a redirect drops it.
 - Non-2xx errors carry the `RequestOutput` in `Details`. A body over `maxResponseBytes`
   (2 MiB) is a `ClientError` without its response, whatever the status.
-- `cmd/outbound` — the Outbound Connector's process: `ClientOptions(settings.OS())`, `worker.New` on
-  `TaskQueue`, `Register`, the setup lines and `Payload codec:` (`codec.Describe`), then
-  `codec.WaitAtStartup` before running the worker.
-- `codec/` (the same in every Go connector repo; copy it, don't change it in one) — `Apply(env,
-  &opts)`, called by `ClientOptions` after the namespace is final, wraps the data converter in
-  `PayloadCodecs` (compiled in) and a remote codec for `TEMPORAL_CODEC_ENDPOINT` or the profile's
-  codec section, with `X-Namespace` and `TEMPORAL_CODEC_AUTH`. Not envconfig's
-  `IncludeRemoteCodec`, which sends the namespace before the `connectors` default applies.
-  `WaitAtStartup` round-trips a test payload (`Check`) until it works, after the startup lines;
-  `Describe` is the `Payload codec:` line. `ErrUnchanged`: a codec that encodes nothing. It sets no
-  failure converter, so error details are not encoded.
-- `settings/` — the same in every Go connector repo. `Program` (sections of `Variable`s and
-  `Family`s, plus cross-variable `Rules`), `Load(env)` (every problem at once), `Define`/`Typed`
-  and `DefineFamily`/`TypedFamily` for typed values, `Env` (`OS()` or `Map`), and `Markdown` for
-  the docs tables. `Temporal{...}.Section()` lists every variable `envconfig` reads. A `Variable`
-  with `External` is read by a library from the process's environment (`ExternalValue`,
-  `MaskURLPassword`).
-- `configui/` — the setup page, never imported by the Outbound Connector. `main.go`, `temporal.go` and
-  `index.html` are generic (the page renders only from `/api/settings`); `connector.go` lists this
-  repo's programs, test fields and `checkOutbound`, which runs `Request` once in the SDK's test
+- `describe.go`: `Describe`, the allowlist and secret lines (also the setup page's), and `Report`,
+  the startup report (`report.Format`: the settings with `report.Env` marking defaults,
+  `temporalclient.Section`, then the task queue and `Describe`'s lines).
+- `cmd/outbound` — the Outbound Connector's process, through `startup`: `startup.New`,
+  `Config(err)` from `NewWithEnv(env)`, `Temporal()`, `Problems()` (exit with every problem),
+  `worker.New` on `TaskQueue`, `Register`, `Report`, then `Ready(ctx)` (waits for the payload codec;
+  `ErrStopped` means interrupted: stop quietly) before running the worker.
+- `nexus-connector-shared/` (the same in every Go connector repo; see its README) — `settings`
+  (`Program`, `Load(env)`, `Define`/`Typed`, `DefineFamily`/`TypedFamily`, `Env`, `Markdown` for the
+  docs tables, `Temporal{...}.Section()`, `External` variables), `temporalclient` (`Options`:
+  envconfig, namespace default `connectors`, then `codec.Apply`; `Section` for the report), `codec`
+  (the payload codec: `Apply`, `WaitAtStartup`, `Describe`), `startup`, `report`, `deadline`,
+  `configui` (the setup page), and test helpers (`test/codectest`, `test/configuitest`,
+  `test/encryption`).
+- `configui/` — the setup page, never imported by the Outbound Connector. The page is
+  `nexus-connector-shared/configui` (it renders only from `/api/settings`; its own tests use
+  made-up programs); this repo's `main.go` runs it and `connector.go` lists this repo's program,
+  test fields and `checkOutbound`, which runs `Request` once in the SDK's test
   activity environment. A test runs against `settings.Map` built from the process's environment with
   the page's values in place of every variable `Settings` owns; nothing calls `os.Setenv`. External
   variables (the proxies) come from the process's environment only: the page shows them read-only,
   masked, and `/api/test` refuses them. The page shows what the Temporal profile file sets
-  (`describeProfile`, with envconfig's loader), and the Temporal check says which profile it read.
-  configui must not make its own client (`ownclient_test.go`): its checks go through `NewWithEnv`.
+  (with envconfig's loader), and the Temporal check says which profile it read. configui must not
+  make its own client (`TestNoOwnClient`): its checks go through `NewWithEnv`.
 - `testcaller/` — test only: `CallerWorkflow(req, timeout)` (the Nexus operation timeout; 0 for
   none), a worker, a starter, and the end-to-end tests. `ClientOptions` (worker and starter)
   encrypts with the demo codec when `DEMO_ENCRYPTION_KEY` is set, in a block marked
   `BEGIN ENCRYPTION (optional)` / `END ENCRYPTION (optional)`, plus an import marked
   `ENCRYPTION (optional)`; deleting them leaves working code.
-- `test/encryption/` — test only: the demo AES-GCM codec (`DEMO_ENCRYPTION_KEY`) and `codecserver`
-  (`go run ./test/encryption/codecserver`, http://localhost:8089).
+- `nexus-connector-shared/test/encryption/` — test only: the demo AES-GCM codec
+  (`DEMO_ENCRYPTION_KEY`) and `codecserver`
+  (`go run ./nexus-connector-shared/test/encryption/codecserver`, http://localhost:8089).
 
 ### Tests
 
@@ -416,13 +425,13 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
   `newWithWindow(testWindow)` rather than the environment variable; it allows no secret anywhere,
   so tests that send secrets but aren't about their domains wrap it in `anySecretHost`.
   `secretdomains_test.go` tries to send secrets to hosts their lists don't hold.
-- `settings/` — `Load`, families, docs tables; `nobypass_test.go` parses every non-test Go file
-  and fails on a direct environment read outside `settings/env.go`.
+- `nexus-connector-shared/` — its own tests, including `settings/nobypass_test.go`, which parses
+  every non-test Go file and fails on a direct environment read outside `settings/env.go`, and the
+  setup page's generic tests (local only, bad requests, the profile file, external variables).
 - `configui/` — the settings JSON (every variable in order, secrets only as set or not, external
-  variables masked, the profile file's values), the Host
-  and JSON checks, bad test requests, the Settings check matching `NewWithEnv`'s error line for
-  line, a test request with a typed and a kept secret that never come back, and the Temporal check
-  against a dev server (skipped with `-short`). `configui/gendocs` fails if docs/setup.md is stale.
+  variables masked), the proxy variables refused, the Settings check matching `NewWithEnv`'s error line for
+  line, a test request with a typed and a kept secret that never come back, the Temporal check
+  against a dev server (skipped with `-short`), and `TestNoOwnClient`. `configui/gendocs` fails if docs/setup.md is stale.
 - `testcaller/e2e_test.go` — starts a dev server with the `temporal` CLI (skipped if it isn't on
   the PATH, or with `-short`), creates both namespaces and the endpoint, runs both workers
   in-process, and runs `CallerWorkflow` against `httptest` servers: success, a retried 503,
@@ -431,6 +440,7 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
   `InvalidRequest`, a domain not allowed, and a secret sent outside its `_DOMAINS` list, all
   rejected at start, and a secret sent within its list. It sets the allowed domains to
   `127.0.0.1`. `startDevServer` does the setup both tests share. `TestEndToEnd_EncryptedRequest`
-  gives the Outbound Connector's client `codec.Apply` with `codecServer` (an `httptest` server for
-  the demo codec) and the caller `withDemoCodec`, then checks with `requireEncrypted` that the Nexus
+  gives the Outbound Connector's client `temporalclient.Options` with `codectest.Server` (an
+  `httptest` server for the demo codec) and the caller `codectest.WithDemoCodec`, then checks with
+  `codectest.RequireEncrypted` that the Nexus
   operation's and the activity's input and result are stored encrypted.

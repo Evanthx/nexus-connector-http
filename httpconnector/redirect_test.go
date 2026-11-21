@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
-	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 )
 
 func TestAllowRedirects(t *testing.T) {

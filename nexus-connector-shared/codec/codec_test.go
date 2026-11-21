@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/temporalio/nexus-connector-http/settings"
-	"github.com/temporalio/nexus-connector-http/test/encryption"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/test/encryption"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"

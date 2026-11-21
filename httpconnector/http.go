@@ -19,7 +19,7 @@ import (
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
-	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"

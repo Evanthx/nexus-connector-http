@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -14,13 +13,13 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/temporalio/nexus-connector-http/codec"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
-	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/configui"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
+	ct "github.com/temporalio/nexus-connector-http/nexus-connector-shared/test/configuitest"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/contrib/envconfig"
 	"go.temporal.io/sdk/testsuite"
 )
 
@@ -36,67 +35,10 @@ const (
 // "github.com/slack-go/slack.New" or "github.com/twmb/franz-go/pkg/kgo.NewClient".
 var connectorClientMakers = []string{}
 
-// baseEnv is the environment configui was started in, for a test: nothing of the developer's own,
-// and no Temporal profile file.
-func baseEnv(t *testing.T, vars settings.Map) settings.Map {
-	env := settings.Map{"TEMPORAL_CONFIG_FILE": filepath.Join(t.TempDir(), "none.toml")}
-	for k, v := range vars {
-		env[k] = v
-	}
-	return env
-}
-
-// setTemporalTimeout sets temporalTimeout for the test.
-func setTemporalTimeout(t *testing.T, d time.Duration) {
-	old := temporalTimeout
-	temporalTimeout = d
-	t.Cleanup(func() { temporalTimeout = old })
-}
-
-func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "http://localhost:8090"+path, nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
-}
-
-func post(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "http://localhost:8090/api/test", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
-}
-
-// postTest posts req and returns the response, raw and decoded.
-func postTest(t *testing.T, h http.Handler, req testRequest) (string, testResponse) {
-	t.Helper()
-	b, err := json.Marshal(req)
-	require.NoError(t, err)
-	rec := post(t, h, string(b))
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var resp testResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	return rec.Body.String(), resp
-}
-
-func checkTitled(t *testing.T, resp testResponse, title string) check {
-	t.Helper()
-	for _, c := range resp.Checks {
-		if c.Title == title {
-			return c
-		}
-	}
-	require.Failf(t, "no check", "%q in %+v", title, resp.Checks)
-	return check{}
-}
-
 // The page gets every variable in the settings list, in order, with what index.html reads, and
 // the values set now, but never a secret's value.
 func TestSettings_JSON(t *testing.T) {
-	h := newServer(baseEnv(t, settings.Map{
+	h := configui.NewServer(pageTitle, ct.BaseEnv(t, settings.Map{
 		httpconnector.AllowedDomainsEnvVar: "api.stripe.com",
 		stripe:                             "sk_live_never_sent",
 		stripeDomains:                      "api.stripe.com",
@@ -105,13 +47,13 @@ func TestSettings_JSON(t *testing.T) {
 		"HTTPS_PROXY":      "http://user:proxy_pw_never_sent@proxy.example:8080",
 		"http_proxy":       "plain:alias%2Fpw_never_sent@proxy2.example:3128", // HTTP_PROXY unset: Go reads this
 	}), programs)
-	rec := get(t, h, "/api/settings")
+	rec := ct.Get(t, h, "/api/settings")
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NotContains(t, rec.Body.String(), "sk_live_never_sent")
 	require.NotContains(t, rec.Body.String(), "temporal_key_never_sent")
 	require.NotContains(t, rec.Body.String(), "pw_never_sent")
 
-	var page pageJSON
+	var page configui.Page
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
 	require.Equal(t, pageTitle, page.Title)
 	require.Len(t, page.Programs, 1)
@@ -157,7 +99,7 @@ func TestSettings_JSON(t *testing.T) {
 
 	// External variables: read-only, as Go reads them, masked, and never among the values the page
 	// sends.
-	require.Equal(t, map[string]externalJSON{
+	require.Equal(t, map[string]configui.PageExternal{
 		"HTTPS_PROXY": {Set: true, From: "HTTPS_PROXY", Value: "http://user:****@proxy.example:8080"},
 		"HTTP_PROXY":  {Set: true, From: "http_proxy", Value: "plain:****@proxy2.example:3128"},
 		"NO_PROXY":    {},
@@ -168,7 +110,7 @@ func TestSettings_JSON(t *testing.T) {
 	require.Equal(t, []string{"https_proxy"}, network.Variables[0].Aliases)
 	require.Equal(t, []string{}, p.Sections[0].Variables[0].Aliases, "[], not null")
 
-	require.Equal(t, &profileJSON{
+	require.Equal(t, &configui.PageProfile{
 		File: page.TemporalProfile.File, Profile: "default", Variable: "TEMPORAL_CONFIG_FILE",
 		Values: map[string]string{}, SecretsSet: map[string]bool{},
 	}, page.TemporalProfile, "no file")
@@ -191,166 +133,9 @@ func TestSettings_JSON(t *testing.T) {
 	}
 }
 
-// Every variable envconfig reads and the Outbound Connector uses is in the Temporal section, and every
-// setting of a profile maps to one of them.
-func TestTemporalSection_ListsWhatEnvconfigReads(t *testing.T) {
-	names := map[string]bool{}
-	for _, v := range httpconnector.Settings.Variables() {
-		names[v.Name] = true
-	}
-	// Every setting a profile can have, as profileVariables maps it.
-	vars := profileVariables(&envconfig.ClientConfigProfile{
-		Address: "a", Namespace: "n", APIKey: "k", Authority: "au", GRPCMeta: map[string]string{"x-tenant": "t"},
-		TLS: &envconfig.ClientConfigTLS{
-			ClientCertPath: "c", ClientCertData: []byte("c"), ClientKeyPath: "k", ClientKeyData: []byte("k"),
-			ServerCACertPath: "ca", ServerCACertData: []byte("ca"), ServerName: "s", DisableHostVerification: true,
-		},
-	})
-	for name, value := range vars {
-		require.NotEmpty(t, value, name)
-		require.True(t, httpconnector.Settings.Owns(name), "%s isn't in the Temporal section", name)
-	}
-	// Every variable envconfig's ApplyEnvVars reads, but TEMPORAL_CODEC_*, which the codec package
-	// reads (checked below), and TEMPORAL_PROFILE and TEMPORAL_CONFIG_FILE, which choose the profile.
-	for _, name := range []string{
-		"TEMPORAL_ADDRESS", "TEMPORAL_NAMESPACE", "TEMPORAL_API_KEY", "TEMPORAL_CLIENT_AUTHORITY", "TEMPORAL_TLS",
-		"TEMPORAL_TLS_CLIENT_CERT_PATH", "TEMPORAL_TLS_CLIENT_CERT_DATA", "TEMPORAL_TLS_CLIENT_KEY_PATH",
-		"TEMPORAL_TLS_CLIENT_KEY_DATA", "TEMPORAL_TLS_SERVER_CA_CERT_PATH", "TEMPORAL_TLS_SERVER_CA_CERT_DATA",
-		"TEMPORAL_TLS_SERVER_NAME", "TEMPORAL_TLS_DISABLE_HOST_VERIFICATION", "TEMPORAL_GRPC_META_X_TENANT",
-	} {
-		require.Contains(t, vars, name)
-		require.True(t, httpconnector.Settings.Owns(name), name)
-	}
-	require.True(t, names["TEMPORAL_PROFILE"])
-	require.True(t, names["TEMPORAL_CONFIG_FILE"])
-	require.True(t, names[codec.EndpointEnvVar])
-	require.True(t, names[codec.AuthEnvVar])
-	for _, secret := range []string{"TEMPORAL_API_KEY", "TEMPORAL_TLS_CLIENT_KEY_DATA", "TEMPORAL_GRPC_META_X_TENANT", codec.AuthEnvVar} {
-		require.True(t, httpconnector.Settings.IsSecret(secret), secret)
-	}
-}
-
-// A value from the Temporal profile file is shown with the file and profile, a secret only as set;
-// a gRPC header it sets is an instance; and the Test says which profile it read.
-func TestSettings_TemporalProfile(t *testing.T) {
-	setTemporalTimeout(t, time.Second)
-	file := filepath.Join(t.TempDir(), "temporal.toml")
-	require.NoError(t, os.WriteFile(file, []byte(`
-[profile.default]
-address = "wrong:7233"
-
-[profile.staging]
-address = "staging.example:7233"
-namespace = "from-file"
-api_key = "file_key_never_sent"
-grpc_meta = { x-tenant = "acme" }
-
-[profile.staging.tls]
-server_name = "staging.example"
-`), 0o600))
-	base := settings.Map{"TEMPORAL_CONFIG_FILE": file, "TEMPORAL_PROFILE": "staging", "TEMPORAL_NAMESPACE": "from-env"}
-	h := newServer(base, programs)
-	rec := get(t, h, "/api/settings")
-	require.NotContains(t, rec.Body.String(), "file_key_never_sent")
-	require.NotContains(t, rec.Body.String(), "acme")
-	var page pageJSON
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
-	require.Equal(t, &profileJSON{
-		File: file, Profile: "staging", Variable: "TEMPORAL_CONFIG_FILE", Exists: true, Found: true,
-		Values: map[string]string{
-			"TEMPORAL_ADDRESS": "staging.example:7233", "TEMPORAL_NAMESPACE": "from-file",
-			"TEMPORAL_TLS": "true", "TEMPORAL_TLS_SERVER_NAME": "staging.example",
-		},
-		SecretsSet: map[string]bool{"TEMPORAL_API_KEY": true, "TEMPORAL_GRPC_META_X_TENANT": true},
-	}, page.TemporalProfile)
-	require.Equal(t, "from-env", page.Values["TEMPORAL_NAMESPACE"], "the environment's value is shown as the value; the file's as a note")
-	var meta familyJSON
-	for _, s := range page.Programs[0].Sections {
-		for _, f := range s.Families {
-			if f.Prefix == "TEMPORAL_GRPC_META_" {
-				meta = f
-			}
-		}
-	}
-	require.Equal(t, []string{"X_TENANT"}, meta.Instances, "a header the file sets is shown, so a value can override it")
-
-	// The Test reads the profile the page's values choose, the file's values under the page's.
-	raw, resp := postTest(t, h, testRequest{Program: "outbound", Values: map[string]string{
-		"TEMPORAL_CONFIG_FILE": file, "TEMPORAL_PROFILE": "staging", "TEMPORAL_ADDRESS": "127.0.0.1:1",
-		httpconnector.AllowedDomainsEnvVar: "example.com",
-	}})
-	require.NotContains(t, raw, "file_key_never_sent")
-	temporal := checkTitled(t, resp, "Temporal")
-	require.Equal(t, []string{`Read profile "staging" from ` + file + `; it sets TEMPORAL_ADDRESS, TEMPORAL_API_KEY, ` +
-		`TEMPORAL_GRPC_META_X_TENANT, TEMPORAL_NAMESPACE, TEMPORAL_TLS, TEMPORAL_TLS_SERVER_NAME, each overridden by its variable if set.`},
-		temporal.Passed)
-	require.Contains(t, temporal.Problems[0], "Failed to connect to Temporal at 127.0.0.1:1", "the page's address, not the file's")
-
-	_, resp = postTest(t, h, testRequest{Program: "outbound", Values: map[string]string{
-		"TEMPORAL_CONFIG_FILE": file, "TEMPORAL_PROFILE": "missing", httpconnector.AllowedDomainsEnvVar: "example.com",
-	}})
-	require.Contains(t, checkTitled(t, resp, "Temporal").Problems[0], "unable to find profile missing")
-}
-
-// External variables come from where configui runs: the page can't send them, and a proxy's
-// password never appears in the Test's output, though a library's error quotes the URL.
-func TestTest_ExternalVariables(t *testing.T) {
-	setTemporalTimeout(t, time.Second)
-	h := newServer(baseEnv(t, nil), programs)
-	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "NO_PROXY"} {
-		rec := post(t, h, `{"program":"outbound","values":{"`+name+`":"http://x"}}`)
-		require.Equal(t, http.StatusBadRequest, rec.Code, name)
-		require.Contains(t, rec.Body.String(), name+" is read by Go's HTTP client", name)
-	}
-
-	resp := testResponse{Checks: []check{{
-		Title:    "Outbound Connector",
-		Problems: []string{`proxyconnect tcp: invalid proxy address "http://u:pw%2Fsecret@proxy:bad": parse error`, "pw/secret alone"},
-	}}}
-	env := settings.Map{"HTTPS_PROXY": "http://u:pw%2Fsecret@proxy:bad"}
-	redactAll(&resp, redactions(httpconnector.Settings, env))
-	require.Equal(t, []string{`proxyconnect tcp: invalid proxy address "http://u:****@proxy:bad": parse error`, "[REDACTED] alone"},
-		resp.Checks[0].Problems)
-}
-
-func TestLocalOnly(t *testing.T) {
-	h := newServer(baseEnv(t, nil), programs)
-
-	req := httptest.NewRequest(http.MethodGet, "http://evil.example:8090/api/settings", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusForbidden, rec.Code, "a Host other than localhost is refused")
-
-	req = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8090/api/test", strings.NewReader(`{}`))
-	req.Header.Set("Content-Type", "text/plain")
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusUnsupportedMediaType, rec.Code, "a POST that isn't JSON is refused")
-
-	require.Equal(t, http.StatusOK, get(t, h, "/").Code)
-	require.Equal(t, http.StatusOK, get(t, h, "/api/settings").Code)
-}
-
-func TestTest_RefusesABadRequest(t *testing.T) {
-	h := newServer(baseEnv(t, nil), programs)
-	for body, want := range map[string]string{
-		`{"program":`:           "bad request",
-		`{"program":"inbound"}`: `unknown program "inbound"`,
-		`{"program":"outbound","values":{"A=B":"x"}}`:     `"A=B" isn't a variable name`,
-		`{"program":"outbound","values":{"1ABC":"x"}}`:    `"1ABC" isn't a variable name`,
-		`{"program":"outbound","values":{"":"x"}}`:        `"" isn't a variable name`,
-		`{"program":"outbound","values":{"A B":"x"}}`:     `"A B" isn't a variable name`,
-		`{"program":"outbound","values":{"A\u0000":"x"}}`: `isn't a variable name`,
-	} {
-		rec := post(t, h, body)
-		require.Equal(t, http.StatusBadRequest, rec.Code, body)
-		require.Contains(t, rec.Body.String(), want, body)
-	}
-}
-
 // The Settings check reports exactly what the Outbound Connector would at startup, every problem at once.
 func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
-	setTemporalTimeout(t, time.Second)
+	ct.SetTemporalTimeout(t, time.Second)
 	values := map[string]string{
 		httpconnector.AllowedDomainsEnvVar:   "https://example.com",
 		httpconnector.RateLimitMinutesEnvVar: "0",
@@ -358,21 +143,21 @@ func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
 		stripe:                               "sk_typed",
 		"TEMPORAL_ADDRESS":                   "127.0.0.1:1",
 	}
-	_, resp := postTest(t, newServer(baseEnv(t, nil), programs), testRequest{Program: "outbound", Values: values})
+	_, resp := ct.PostTest(t, configui.NewServer(pageTitle, ct.BaseEnv(t, nil), programs), configui.TestRequest{Program: "outbound", Values: values})
 	require.False(t, resp.OK)
 
 	_, startupErr := httpconnector.NewWithEnv(settings.Map(values))
 	require.Error(t, startupErr)
-	require.Equal(t, strings.Split(startupErr.Error(), "\n"), checkTitled(t, resp, "Settings").Problems)
-	require.Len(t, checkTitled(t, resp, "Settings").Problems, 4)
-	require.Contains(t, checkTitled(t, resp, "Temporal").Problems[0], "Failed to connect to Temporal at 127.0.0.1:1")
-	require.Equal(t, "Fix the settings first.", checkTitled(t, resp, "Outbound Connector").Skipped)
+	require.Equal(t, strings.Split(startupErr.Error(), "\n"), ct.CheckTitled(t, resp, "Settings").Problems)
+	require.Len(t, ct.CheckTitled(t, resp, "Settings").Problems, 4)
+	require.Contains(t, ct.CheckTitled(t, resp, "Temporal").Problems[0], "Failed to connect to Temporal at 127.0.0.1:1")
+	require.Equal(t, "Fix the settings first.", ct.CheckTitled(t, resp, "Outbound Connector").Skipped)
 }
 
 // A secret typed on the page is used for the test request and never comes back; a kept one is
 // read where configui runs and never comes back either.
 func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
-	setTemporalTimeout(t, time.Second)
+	ct.SetTemporalTimeout(t, time.Second)
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -382,14 +167,14 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	base := baseEnv(t, settings.Map{
+	base := ct.BaseEnv(t, settings.Map{
 		httpconnector.SecretEnvPrefix + "KEPT":         "kept_s3cret",
 		httpconnector.SecretEnvPrefix + "KEPT_DOMAINS": "127.0.0.1",
 		httpconnector.SecretEnvPrefix + "GONE":         "gone_s3cret", // not on the page: unset for the test
 		httpconnector.AllowedDomainsEnvVar:             "example.com", // replaced by the page's value
 	})
-	h := newServer(base, programs)
-	req := testRequest{
+	h := configui.NewServer(pageTitle, base, programs)
+	req := configui.TestRequest{
 		Program: "outbound",
 		Values: map[string]string{
 			httpconnector.AllowedDomainsEnvVar:             "127.0.0.1",
@@ -401,11 +186,11 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 		KeepSecrets: map[string]bool{httpconnector.SecretEnvPrefix + "KEPT": true},
 		Fields:      map[string]string{"url": srv.URL + "/check", "secret": "STRIPE"},
 	}
-	raw, resp := postTest(t, h, req)
+	raw, resp := ct.PostTest(t, h, req)
 	require.Equal(t, "Bearer typed_s3cret", gotAuth, "the request used the page's secret")
 	require.NotContains(t, raw, "s3cret")
 
-	connector := checkTitled(t, resp, "Outbound Connector")
+	connector := ct.CheckTitled(t, resp, "Outbound Connector")
 	require.Empty(t, connector.Problems)
 	require.Contains(t, connector.Passed, "Secret "+httpconnector.SecretEnvPrefix+"KEPT may be sent to: 127.0.0.1")
 	require.Contains(t, connector.Passed, "Secret "+stripe+" may be sent to: 127.0.0.1")
@@ -416,7 +201,7 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 
 	// The kept secret, sent the same way.
 	req.Fields["secret"] = "KEPT"
-	raw, _ = postTest(t, h, req)
+	raw, _ = ct.PostTest(t, h, req)
 	require.Equal(t, "Bearer kept_s3cret", gotAuth)
 	require.NotContains(t, raw, "s3cret")
 }
@@ -424,8 +209,8 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 // A request the Outbound Connector refuses shows its error, and a secret's domain the allowlist doesn't
 // allow is a problem.
 func TestTest_ConnectorProblems(t *testing.T) {
-	setTemporalTimeout(t, time.Second)
-	_, resp := postTest(t, newServer(baseEnv(t, nil), programs), testRequest{
+	ct.SetTemporalTimeout(t, time.Second)
+	_, resp := ct.PostTest(t, configui.NewServer(pageTitle, ct.BaseEnv(t, nil), programs), configui.TestRequest{
 		Program: "outbound",
 		Values: map[string]string{
 			httpconnector.AllowedDomainsEnvVar: "example.com",
@@ -440,39 +225,7 @@ func TestTest_ConnectorProblems(t *testing.T) {
 		stripeDomains + ` lists "api.stripe.com", which isn't within ` + httpconnector.AllowedDomainsEnvVar + ", so the Outbound Connector won't call it",
 		`GET https://not-allowed.test/: InvalidRequest: domain "not-allowed.test" is not on the Outbound Connector's list of allowed domains (` +
 			httpconnector.AllowedDomainsEnvVar + ")",
-	}, checkTitled(t, resp, "Outbound Connector").Problems)
-}
-
-// The page's values replace every variable the program owns; others pass through.
-func TestPageEnv(t *testing.T) {
-	base := settings.Map{
-		"HOME":                               "/home/x",
-		"HTTPS_PROXY":                        "http://proxy.example:8080", // external: the page can't change it
-		"TEMPORAL_TLS_CLIENT_CERT_PATH":      "/cert",                     // owned, not sent: unset
-		httpconnector.AllowedDomainsEnvVar:   "old.example.com",
-		httpconnector.RateLimitMinutesEnvVar: "9",
-		stripe:                               "kept",
-		stripeDomains:                        "api.stripe.com",
-		httpconnector.SecretEnvPrefix + "REMOVED": "x",
-	}
-	env := pageEnv(base, httpconnector.Settings, testRequest{
-		Values: map[string]string{
-			httpconnector.AllowedDomainsEnvVar:   "new.example.com",
-			httpconnector.RateLimitMinutesEnvVar: "  ",
-			stripeDomains:                        "api.stripe.com",
-			stripe:                               "ignored: kept",
-			"EXTRA":                              "added",
-		},
-		KeepSecrets: map[string]bool{stripe: true, "HOME": true},
-	})
-	require.Equal(t, settings.Map{
-		"HOME":                             "/home/x",
-		"HTTPS_PROXY":                      "http://proxy.example:8080",
-		httpconnector.AllowedDomainsEnvVar: "new.example.com",
-		stripe:                             "kept",
-		stripeDomains:                      "api.stripe.com",
-		"EXTRA":                            "added",
-	}, env)
+	}, ct.CheckTitled(t, resp, "Outbound Connector").Problems)
 }
 
 // Against a dev server: the namespace exists, and the Test reports a missing endpoint with the
@@ -485,7 +238,7 @@ func TestTest_Temporal(t *testing.T) {
 	if err != nil {
 		t.Skip("the temporal CLI is not on the PATH")
 	}
-	setTemporalTimeout(t, 10*time.Second)
+	ct.SetTemporalTimeout(t, 10*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{
@@ -494,15 +247,15 @@ func TestTest_Temporal(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = server.Stop() })
 
-	base := baseEnv(t, nil)
-	h := newServer(base, programs)
-	req := testRequest{Program: "outbound", Values: map[string]string{
+	base := ct.BaseEnv(t, nil)
+	h := configui.NewServer(pageTitle, base, programs)
+	req := configui.TestRequest{Program: "outbound", Values: map[string]string{
 		httpconnector.AllowedDomainsEnvVar: "example.com",
 		"TEMPORAL_ADDRESS":                 server.FrontendHostPort(),
 		"TEMPORAL_CONFIG_FILE":             base["TEMPORAL_CONFIG_FILE"], // as the page sends every variable it shows
 	}}
-	_, resp := postTest(t, h, req)
-	temporal := checkTitled(t, resp, "Temporal")
+	_, resp := ct.PostTest(t, h, req)
+	temporal := ct.CheckTitled(t, resp, "Temporal")
 	require.Equal(t, []string{
 		"No Temporal profile file at " + base["TEMPORAL_CONFIG_FILE"] + ": only the TEMPORAL_* variables apply.",
 		"Connected to Temporal at " + server.FrontendHostPort() + ".", `Namespace "connectors" exists.`,
@@ -521,21 +274,28 @@ func TestTest_Temporal(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	_, resp = postTest(t, h, req)
+	_, resp = ct.PostTest(t, h, req)
 	require.True(t, resp.OK, "%+v", resp.Checks)
-	require.Contains(t, checkTitled(t, resp, "Temporal").Passed,
+	require.Contains(t, ct.CheckTitled(t, resp, "Temporal").Passed,
 		`Nexus endpoint "http-endpoint" targets namespace "connectors" and task queue "nexus-connector-http".`)
 
 	req.Values["TEMPORAL_NAMESPACE"] = "missing"
-	_, resp = postTest(t, h, req)
-	require.Contains(t, checkTitled(t, resp, "Temporal").Problems[0], `Namespace "missing" doesn't exist.`)
+	_, resp = ct.PostTest(t, h, req)
+	require.Contains(t, ct.CheckTitled(t, resp, "Temporal").Problems[0], `Namespace "missing" doesn't exist.`)
 }
 
-func TestValidName(t *testing.T) {
-	for _, ok := range []string{"A", "_A", "a1_B"} {
-		require.True(t, validName(ok), ok)
+// The proxy variables come from where configui runs, as Go's HTTP client reads them: the page
+// can't send them, HTTP_PROXY and its lower-case alias included.
+func TestTest_ExternalVariables(t *testing.T) {
+	h := configui.NewServer(pageTitle, ct.BaseEnv(t, nil), programs)
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy"} {
+		rec := ct.Post(t, h, `{"program":"outbound","values":{"`+name+`":"http://x"}}`)
+		require.Equal(t, http.StatusBadRequest, rec.Code, name)
+		require.Contains(t, rec.Body.String(), name+" is read by Go's HTTP client", name)
 	}
-	for _, bad := range []string{"", "1A", "A-B", "A=B", "A B", "Ä"} {
-		require.False(t, validName(bad), bad)
-	}
+}
+
+// The page's checks go through httpconnector (NewWithEnv, Request), not a client of the page's own.
+func TestNoOwnClient(t *testing.T) {
+	ct.RequireNoOwnClient(t, ".", connectorClientMakers...)
 }

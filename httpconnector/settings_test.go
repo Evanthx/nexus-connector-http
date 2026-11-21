@@ -1,13 +1,12 @@
 package httpconnector
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
-	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 )
 
 // NewWithEnv reads its configuration and the requests' secrets from the env it is given, not the
@@ -53,18 +52,6 @@ func TestCheckSecretsAllowed(t *testing.T) {
 
 	a.domains = nil
 	require.NoError(t, a.CheckSecretsAllowed(), "the allowlist is disabled")
-}
-
-func TestClientOptions(t *testing.T) {
-	none := filepath.Join(t.TempDir(), "none.toml")
-	opts, err := ClientOptions(settings.Map{"TEMPORAL_CONFIG_FILE": none, "TEMPORAL_ADDRESS": "temporal.example:7233"})
-	require.NoError(t, err)
-	require.Equal(t, "temporal.example:7233", opts.HostPort)
-	require.Equal(t, "connectors", opts.Namespace)
-
-	opts, err = ClientOptions(settings.Map{"TEMPORAL_CONFIG_FILE": none, "TEMPORAL_NAMESPACE": "mine"})
-	require.NoError(t, err)
-	require.Equal(t, "mine", opts.Namespace)
 }
 
 // Every variable the Outbound Connector names has an entry in Settings, with help.

@@ -10,7 +10,7 @@ import (
 	"os"
 
 	"github.com/temporalio/nexus-connector-http/httpconnector"
-	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 )
 
 // programs are the programs whose variables the docs list, in order.

@@ -1,8 +1,8 @@
 package main
 
 // This file is what the setup page knows about this repo's program, the Outbound Connector, and the checks
-// particular to it. The variables themselves come from httpconnector.Settings. The rest of
-// configui is the same in every Go connector repo.
+// particular to it. The variables themselves come from httpconnector.Settings. The rest of the page
+// is the configui package in nexus-connector-shared.
 
 import (
 	"context"
@@ -14,7 +14,9 @@ import (
 
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
-	"github.com/temporalio/nexus-connector-http/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/configui"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/temporalclient"
 	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -22,13 +24,13 @@ import (
 
 const pageTitle = "HTTP connector setup"
 
-var programs = []program{{
+var programs = []configui.Program{{
 	Settings:                httpconnector.Settings,
-	ClientOptions:           httpconnector.ClientOptions,
+	ClientOptions:           temporalclient.Options,
 	TaskQueue:               func(settings.Env) string { return httpconnector.TaskQueue },
 	EndpointName:            "http-endpoint",
 	EndpointDescriptionFile: "./endpoint-description.md",
-	TestFields: []testField{
+	TestFields: []configui.TestField{
 		{
 			ID: "url", Kind: "text", Label: "Test request URL", Placeholder: "https://httpbin.org/get",
 			Help: "Optional. The Test sends one GET to this URL through the Outbound Connector's own request code, with the " +
@@ -46,8 +48,8 @@ var programs = []program{{
 // checkOutbound builds the Outbound Connector from env as it builds itself at startup, then reports what it allows,
 // any secret domain the allowlist doesn't allow, and, if fields has a url, the result of one GET
 // sent through the Outbound Connector's Request activity.
-func checkOutbound(_ context.Context, env settings.Env, fields map[string]string) check {
-	c := check{Title: "Outbound Connector"}
+func checkOutbound(_ context.Context, env settings.Env, fields map[string]string) configui.Check {
+	c := configui.Check{Title: "Outbound Connector"}
 	a, err := httpconnector.NewWithEnv(env)
 	if err != nil {
 		c.Skipped = "Fix the settings first."
