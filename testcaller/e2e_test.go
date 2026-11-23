@@ -15,8 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/temporalclient"
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/test/codectest"
+	"github.com/temporalio/nexus-connector-http/setup"
 	"github.com/temporalio/nexus-connector-http/testcaller"
 	commonpb "go.temporal.io/api/common/v1"
 	historypb "go.temporal.io/api/history/v1"
@@ -51,7 +53,7 @@ func TestEndToEnd(t *testing.T) {
 	t.Setenv(httpconnector.SecretEnvPrefix+"ELSEWHERE", "elsewh3re")
 	t.Setenv(httpconnector.SecretEnvPrefix+"ELSEWHERE"+httpconnector.SecretDomainsSuffix, "api.example.com")
 	connectorWorker := worker.New(connectorClient, httpconnector.TaskQueue, worker.Options{})
-	require.NoError(t, httpconnector.Register(connectorWorker))
+	registerConnector(t, connectorWorker)
 	require.NoError(t, connectorWorker.Start())
 	t.Cleanup(connectorWorker.Stop)
 
@@ -282,7 +284,7 @@ func TestEndToEnd_EncryptedRequest(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(connectorClient.Close)
 	connectorWorker := worker.New(connectorClient, httpconnector.TaskQueue, worker.Options{})
-	require.NoError(t, httpconnector.Register(connectorWorker))
+	registerConnector(t, connectorWorker)
 	require.NoError(t, connectorWorker.Start())
 	t.Cleanup(connectorWorker.Stop)
 
@@ -367,4 +369,13 @@ func TestEndToEnd_EncryptedRequest(t *testing.T) {
 	for _, d := range details {
 		codectest.RequireEncrypted(t, d, errorBody)
 	}
+}
+
+// registerConnector registers the Outbound Connector on w, configured from the process's
+// environment as the program configures itself.
+func registerConnector(t *testing.T, w worker.Registry) {
+	t.Helper()
+	vals, err := setup.Outbound.Load(settings.OS())
+	require.NoError(t, err)
+	httpconnector.Register(w, httpconnector.New(setup.Config(vals), settings.OS()))
 }

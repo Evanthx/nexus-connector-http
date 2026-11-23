@@ -57,9 +57,9 @@ Outbound Connector configuration (values marked "default" come from variables th
     HTTP_CONNECTOR_ALLOWED_DOMAINS          api.weatherapi.com, httpbin.org
   Requests
     HTTP_CONNECTOR_ALLOW_REDIRECTS          false (default)
-    HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS  1m0s (default)
-    HTTP_CONNECTOR_RATE_LIMIT_MINUTES       5m0s (default)
-    HTTP_CONNECTOR_MAX_DURATION_MINUTES     25h0m0s (default)
+    HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS  1m (default)
+    HTTP_CONNECTOR_RATE_LIMIT_MINUTES       5m (default)
+    HTTP_CONNECTOR_MAX_DURATION_MINUTES     25h (default)
   Temporal
     namespace                               connectors (default)
     address                                 localhost:7233 (default)
@@ -83,14 +83,14 @@ every problem, so you can fix them all at once:
 ```
 The Outbound Connector can't start:
 Invalid Outbound Connector configuration:
-  - HTTP_CONNECTOR_RATE_LIMIT_MINUTES must be a whole number of minutes, at least 1; got "1.5"
+  - HTTP_CONNECTOR_RATE_LIMIT_MINUTES must be a whole number of minutes, at least 1, not "1.5"
 Failed to connect to Temporal:
   - failed reaching server: ... connection refused
 ```
 
 ## Environment variables
 
-Set these on the Outbound Connector (`cmd/outbound`). The [setup page](#setup-page) shows the same list and tests your values. The tables below are generated from `httpconnector/settings.go` with `make docs`: change a variable there, not here.
+Set these on the Outbound Connector (`cmd/outbound`). The [setup page](#setup-page) shows the same list and tests your values. The tables below are generated from `setup/settings.go` with `make docs`: change a variable there, not here.
 
 <!-- settings:start -->
 ### Allowed hosts

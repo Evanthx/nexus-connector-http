@@ -13,12 +13,6 @@ import (
 // many minutes a key stays rate-limited after a 429. It must be a whole number, at least 1.
 const RateLimitMinutesEnvVar = "HTTP_CONNECTOR_RATE_LIMIT_MINUTES"
 
-// defaultRateLimitWindow is the window when RateLimitMinutesEnvVar is unset or empty. A live entry
-// blocks every caller with that key for the window, so the endpoint is probed about once per
-// window: the waiting requests all retry when it ends, and if the first one's 429 comes back before
-// the others check, they wait another window. Requests that check at the same moment all go out.
-const defaultRateLimitWindow = 5 * time.Minute
-
 // limiter is an in-process, TTL-based rate-limit cache shared by every Request
 // attempt on this worker: a key is "limited" until its entry expires. It is
 // intentionally NOT durable and NOT shared across worker processes — see the

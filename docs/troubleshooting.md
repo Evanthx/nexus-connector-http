@@ -4,9 +4,9 @@ Common errors, their causes, and fixes.
 
 ## Worker fails to start
 
-**`invalid value for HTTP_CONNECTOR_RATE_LIMIT_MINUTES`** (or `MAX_DURATION_MINUTES`): the value must be a whole number of minutes, at least 1. Any other value (a float, a string, 0) causes the Outbound Connector to exit before logging `Starting worker`.
+**`HTTP_CONNECTOR_RATE_LIMIT_MINUTES must be a whole number of minutes, at least 1, not "..."`** (or `MAX_DURATION_MINUTES`): the value must be a whole number of minutes, at least 1. Any other value (a float, a string, 0) causes the Outbound Connector to exit before logging `Starting worker`.
 
-**`HTTP_CONNECTOR_ALLOWED_DOMAINS is required`**: the variable is unset or empty. Set it to the comma-separated domains the Outbound Connector may call, or to `DISABLE ALLOWLIST` to allow any host. See [Usage — allowed domains](usage.md#allowed-domains).
+**`set HTTP_CONNECTOR_ALLOWED_DOMAINS: ...`**: the variable is unset or empty. Set it to the comma-separated domains the Outbound Connector may call, or to `DISABLE ALLOWLIST` to allow any host. See [Usage — allowed domains](usage.md#allowed-domains).
 
 **`HTTP_CONNECTOR_SECRET_X needs HTTP_CONNECTOR_SECRET_X_DOMAINS`**: every secret variable needs a list of the hosts it may be sent to. Set `HTTP_CONNECTOR_SECRET_X_DOMAINS`, such as `api.example.com`. See [Usage — API keys and secrets](usage.md#api-keys-and-secrets).
 

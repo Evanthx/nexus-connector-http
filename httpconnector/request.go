@@ -178,17 +178,26 @@ func apiKey(env settings.Env, envVar string) (string, error) {
 	return secretEnv(env, envVar)
 }
 
-// secretEnv reads the secret variable envVar from env, through secretsFamily, which reads only
+// secretEnv reads the secret variable envVar from env, through lookupSecret, which reads only
 // variables starting with SecretEnvPrefix. The error names the variable, never its value.
 func secretEnv(env settings.Env, envVar string) (string, error) {
 	if strings.HasSuffix(envVar, SecretDomainsSuffix) {
 		return "", fmt.Errorf("%q lists the domains a secret may be sent to; it isn't a secret", envVar)
 	}
-	secret, _ := secretsFamily.Lookup(env, envVar)
+	secret := lookupSecret(env, envVar)
 	if secret == "" {
 		return "", fmt.Errorf("environment variable %q is unset or empty on the Outbound Connector", envVar)
 	}
 	return secret, nil
+}
+
+// lookupSecret is the variable name's value in env if name starts with SecretEnvPrefix, else "":
+// a request can name only the Outbound Connector's secret variables, never another.
+func lookupSecret(env settings.Env, name string) string {
+	if !strings.HasPrefix(name, SecretEnvPrefix) {
+		return ""
+	}
+	return settings.Get(env, name)
 }
 
 // secretHeaderVars maps each of req's headers whose whole value starts with SecretEnvPrefix, by
@@ -224,7 +233,7 @@ func authorizationEnvVar(req httpapi.RequestInput) string {
 func secrets(env settings.Env, req httpapi.RequestInput) []string {
 	var values []string
 	if envVar := value(req.APIKeyEnvVar); strings.HasPrefix(envVar, SecretEnvPrefix) {
-		if v, _ := secretsFamily.Lookup(env, envVar); v != "" {
+		if v := lookupSecret(env, envVar); v != "" {
 			values = append(values, v)
 			if user := value(req.Username); user != "" {
 				values = append(values, base64.StdEncoding.EncodeToString([]byte(user+":"+v)))
@@ -232,7 +241,7 @@ func secrets(env settings.Env, req httpapi.RequestInput) []string {
 		}
 	}
 	for _, envVar := range secretHeaderVars(req) {
-		if v, _ := secretsFamily.Lookup(env, envVar); v != "" {
+		if v := lookupSecret(env, envVar); v != "" {
 			values = append(values, v)
 			if _, credentials, ok := strings.Cut(v, " "); ok && credentials != "" {
 				values = append(values, credentials)

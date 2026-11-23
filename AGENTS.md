@@ -10,7 +10,8 @@ mistakes to avoid.
 http.nexusrpc.yaml          the contract (source of truth for the wire format)
 endpoint-description.md     the endpoint description shown in the Temporal UI
 cmd/outbound/               the Outbound Connector's process
-httpconnector/              all connector logic; settings.go lists every environment variable
+httpconnector/              all connector logic
+setup/                      every environment variable (settings.go) and the Config it loads
 configui/                   the setup page (make configui); gendocs/ writes docs/setup.md's tables
 generated/httpapi/          Go types generated from the contract — do not edit
 testcaller/                 test workflow, worker, starter, and end-to-end tests
@@ -98,7 +99,7 @@ copies of it in one namespace share the same work.
    to Temporal, checks the namespace and that an endpoint targets it and `nexus-connector-http`, and
    can send one GET through the Outbound Connector's request code. It changes no environment; it lists the
    `export` lines. The full list of variables is in docs/setup.md, generated from
-   `httpconnector/settings.go`.
+   `setup/settings.go`.
 
    | Variable | Value |
    |---|---|
@@ -253,7 +254,7 @@ field.
 ```bash
 make clients    # generate Go, Python, TypeScript and Java callers into .build/clients/ (not committed)
 make generate   # regenerate generated/httpapi from http.nexusrpc.yaml (downloads the pinned nexgen into .build/)
-make docs       # regenerate docs/setup.md's tables of environment variables from httpconnector/settings.go
+make docs       # regenerate docs/setup.md's tables of environment variables from setup/settings.go
 make configui   # serve the setup page on http://localhost:8090
 make test       # go test -race; includes testcaller's end-to-end test, which needs the temporal CLI
 make lint       # golangci-lint
@@ -270,26 +271,32 @@ go test -short ./...                                           # skip the end-to
   `Request`. Keep them. Optional fields are pointers; `method` has a
   `MethodOrDefault()` accessor. The generated `MarshalJSON`/`UnmarshalJSON` validate against the
   contract.
-- **A new environment variable goes in `httpconnector/settings.go` only**: a `settings.Define`
-  with its help, default, required and check, added to a section of `Settings`; read it with
-  `.From(vals)` in `NewWithEnv`. Then run `make docs`; a test fails while docs/setup.md is stale.
+- **A new environment variable goes in `setup/settings.go`**: a `settings.Define` with its help,
+  default, required and check (a shared parse function from `settings`, such as `settings.Minutes`,
+  where one fits), added to a section of `setup.Outbound`; read it with `.From(vals)` in
+  `setup.Config` into a new `httpconnector.Config` field. `httpconnector` never imports `setup`.
+  Then run `make docs`; a test fails while docs/setup.md is stale.
   Never read the environment directly (`os.Getenv`, `os.LookupEnv`, `os.Environ`, ...): only
   `nexus-connector-shared/settings/env.go` may, and its `nobypass_test.go` fails otherwise. A
   variable a library reads from the process's environment itself (such as `HTTPS_PROXY`) is listed
   with `External` (and `Aliases`, and `Mask` if part of it is secret); the setup page shows it
-  read-only. Secrets a request names are read through `secretsFamily.Lookup` from
-  `HTTPActivities.env`.
-- Outside the package, `cmd/outbound` and `testcaller` use only `TaskQueue`, `Register`,
-  `NewWithEnv`, `HTTPActivities.Report`, the `ErrorType*` constants and `AllowedDomainsEnvVar`;
-  `configui` uses `Settings`, `NewWithEnv`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`,
-  `Request`) and `SecretEnvPrefix`. `New`, `ApplyStatus`,
+  read-only. Secrets a request names are read through `lookupSecret` (only variables starting
+  with `SecretEnvPrefix`) from `HTTPActivities.env`.
+- Outside the package, `cmd/outbound` and `testcaller` use only `TaskQueue`, `Config`, `New`,
+  `Register`, `HTTPActivities.Report`, the `ErrorType*` constants and `AllowedDomainsEnvVar`;
+  `configui` uses `Config`, `New`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`,
+  `Request`) and `SecretEnvPrefix`; `setup` uses the `*EnvVar` constants, `ParseDomains`,
+  `ReadSecretDomains`, `DefaultAttemptTimeout` and `MinAttemptTimeout`. Each of them builds the
+  activities the same way: `setup.Outbound.Load(env)`, then `httpconnector.New(setup.Config(vals), env)`.
+  `ApplyStatus`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
   `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AttemptTimeoutEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
   the Outbound Connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
-- `Register` makes one `HTTPActivities` for both the service and the activity registration, so one
-  rate-limit cache is shared. Keep that.
+- `Register(w, a)` uses the one `HTTPActivities` it is given for both the service and the activity
+  registration, so one rate-limit cache is shared; `cmd/outbound` logs `Report` from that same
+  instance. Keep that.
 - A secret value must never enter the request, history, the rate-limit key, error messages, or
   logs. Any new place a response or error text reaches the caller goes through `redact` or
   `redactResponse`. Any new way for a request to name a secret must be added to
@@ -307,17 +314,13 @@ request through the code.
 
 - `http.nexusrpc.yaml` — the contract; `generated/httpapi` is generated from it.
 - `httpconnector/` — nearly all logic.
-  - `http.go`: `TaskQueue`; `Register`, which builds the Nexus operation inline; the `Request`
+  - `http.go`: `TaskQueue`; `Config` and `New(cfg, env)`; `Register(w, a)`, which builds the Nexus
+    operation inline; the `Request`
     activity; `ApplyStatus`, which turns a response's status into the result (clears or marks the
     rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
     whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
-    error type); redaction.
-  - `settings.go`: `Settings`, every variable the Outbound Connector reads, in sections, with the parse
-    functions that check them (`parseAllowedDomains`, `parseAllowRedirects`, `minutes`) and
-    `secretsFamily` (`HTTP_CONNECTOR_SECRET_<NAME>` with `<NAME>_DOMAINS`, checked by
-    `readSecretDomains`). `NewWithEnv(env)` loads them all with `Settings.Load`, which reports
-    every problem at once; `New()` is `NewWithEnv(settings.OS())`. The Temporal client options
-    come from `temporalclient.Options` in `nexus-connector-shared`.
+    error type).
+  - `redact.go`: `redact` and `redactResponse`.
   - The operation validates first (`build` with `a.env`, as `Validate` does, then `CheckDomain`, then `ScheduleToClose` from
     the `operation-timeout` header) and returns a `BadRequest` handler error (cause: an
     `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
@@ -330,19 +333,22 @@ request through the code.
     by Transient errors and attempt timeouts.
   - `request.go`: `build`, in steps `parseURL`, `setQuery` (query parameters, a
     query API key, and the `username`/`apiKeyParam` check), `setHeaders` (headers, the
-    variable any header names via `secretEnv`, which reads it from `a.env` through `secretsFamily`, basic or Bearer auth, `httpguts` validation). Also
+    variable any header names via `secretEnv`, which reads it from `a.env` through `lookupSecret`, basic or Bearer auth, `httpguts` validation). Also
     `secretHeaderVars` (header → variable, for every header whose value starts with the prefix),
     `Validate`, `apiKey`, `RateLimitKey`, `secrets(req)`.
   - `errors.go`: the `ErrorType*` constants. `transientError` leaves the delay to the retry
     policy; `rateLimitedError` sets `NextRetryDelay` to the rest of the window, or a 429's shorter
     `Retry-After`. There is no loop in the activity.
-  - `allowlist.go`: `AllowedDomainsEnvVar`, read by `New()` into `HTTPActivities.domains` (required; nil,
-    from `DisableAllowlist`, = any host); `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
+  - `allowlist.go`: `AllowedDomainsEnvVar`, given to `New` as `Config.AllowedDomains` into `HTTPActivities.domains` (required; nil,
+    from `DisableAllowlist`, = any host); `ParseDomains`, which checks a list for the variable and
+    each secret's `_DOMAINS`; `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
     operation and again by `Request` before sending. Matches the lower-cased host without port
     or trailing dot, exactly or as a subdomain at a dot boundary; an IP address, as entry or host,
     only exactly.
-  - `timeout.go`: `MaxDurationEnvVar` (default 25h, read by `New()` into
-    `HTTPActivities.maxTotal`, exported as `MaxDuration()`; there is always a maximum), and
+  - `timeout.go`: `MaxDurationEnvVar` (default 25h in `setup`, given to `New` as
+    `Config.MaxDuration` into `HTTPActivities.maxTotal`, exported as `MaxDuration()`; there is
+    always a maximum); `AttemptTimeoutEnvVar` with `DefaultAttemptTimeout`, `MinAttemptTimeout` and
+    `requestMargin`, the attempt timeout's constants; and
     `ScheduleToClose(header)`, which is `deadline.ScheduleToClose` with the maximum and one attempt:
     no header → the maximum; else header − `deadline.CallbackMargin` (10s), capped at the maximum,
     or an error wrapping `deadline.ErrTooShort` if under one attempt, with a hint naming
@@ -352,10 +358,10 @@ request through the code.
     `Request` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
     entries. It takes an explicit `now`. `retryAfter` reads a 429's `Retry-After` (seconds or an
     HTTP date) and returns it if shorter than the window, else the window; `mark` holds the key
-    that long. The window is read by `httpconnector.New()`, through
-    `minutes` in `settings.go`, which `MaxDurationEnvVar` shares.
-- `secretdomains.go`: `SecretDomainsSuffix`; `readSecretDomains(env.Environ())`, `secretsFamily`'s
-  check, read by `New()`
+    that long. The window is `Config.RateLimitWindow`, read by `setup` with `settings.Minutes`
+    (default 5m).
+- `secretdomains.go`: `SecretDomainsSuffix`; `ReadSecretDomains(env.Environ())`, the secrets
+  family's check in `setup`, given to `New` as `Config.SecretDomains`
   into `HTTPActivities.secretDomains` (secret variable → domains, nil = any allowed host; a
   variable not in it is sent nowhere), which reports every secret without a list and every list
   without a secret, naming variables only; `CheckSecretDomains`, called by the operation after
@@ -364,11 +370,11 @@ request through the code.
   outside the allowlist. `secretEnv` refuses a `_DOMAINS` variable as a secret. Redirects need no
   check of their own: secrets reach only the original host and its subdomains (see `redirect.go`),
   which the list holds since it holds the original host.
-- Secrets: `redact` replaces each secret from `secrets(req)` (including a header variable's
+- Secrets: `redact` (in `redact.go`) replaces each secret from `secrets(req)` (including a header variable's
   credentials without the scheme, and the base64 `user:key` for basic auth) raw,
   URL-escaped, Go-quoted and JSON-escaped, in transport and body-read errors and, through
   `redactResponse`, in the response's status, headers and body.
-  - `redirect.go`: `AllowRedirectsEnvVar`, read by `New()` into `HTTPActivities.allowRedirects`, and
+  - `redirect.go`: `AllowRedirectsEnvVar`, given to `New` as `Config.AllowRedirects`, and
     `checkRedirect(secretHeaders)`, which returns the client's `CheckRedirect`. Off, it returns
     `http.ErrUseLastResponse` for every redirect, so the 3xx becomes a `ClientError` with its
     response. On, it is Go's default policy (10 redirects, re-enforced since setting `CheckRedirect`
@@ -385,10 +391,19 @@ request through the code.
 - `describe.go`: `Describe`, the allowlist and secret lines (also the setup page's), and `Report`,
   the startup report (`report.Format`: the settings with `report.Env` marking defaults,
   `temporalclient.Section`, then the task queue and `Describe`'s lines).
-- `cmd/outbound` — the Outbound Connector's process, through `startup`: `startup.New`,
-  `Config(err)` from `NewWithEnv(env)`, `Temporal()`, `Problems()` (exit with every problem),
-  `worker.New` on `TaskQueue`, `Register`, `Report`, then `Ready(ctx)` (waits for the payload codec;
-  `ErrStopped` means interrupted: stop quietly) before running the worker.
+- `setup/` — `settings.go`: `Outbound`, every variable the Outbound Connector reads, in sections,
+  with the shared parse functions (`settings.Bool`, `settings.Minutes`, `settings.Required`) and the
+  variable-specific ones (`parseAllowedDomains`, `parseAttemptTimeout`), `secretsFamily`
+  (`HTTP_CONNECTOR_SECRET_<NAME>` with `<NAME>_DOMAINS`, checked by
+  `httpconnector.ReadSecretDomains`), the Temporal and Network sections, and `Config(vals)`, which
+  turns `Outbound.Load`'s values into an `httpconnector.Config`. `Load` reports every problem at
+  once. The Temporal client options come from `temporalclient.Options` in `nexus-connector-shared`.
+- `cmd/outbound` — the Outbound Connector's process. `main.go` holds only `main`, through
+  `startup`: `startup.New`, `Config(err)` from `configFrom(env)` (in `config.go`: `setup.Outbound.Load`
+  then `setup.Config`), `Temporal()`, `Problems()` (exit with every problem), `httpconnector.New`
+  once, `worker.New` on `TaskQueue`, `Register(w, connector)`, `connector.Report`, then `Ready(ctx)`
+  (waits for the payload codec; `ErrStopped` means interrupted: stop quietly) before running the
+  worker.
 - `nexus-connector-shared/` (the same in every Go connector repo; see its README) — `settings`
   (`Program`, `Load(env)`, `Define`/`Typed`, `DefineFamily`/`TypedFamily`, `Env`, `Markdown` for the
   docs tables, `Temporal{...}.Section()`, `External` variables), `temporalclient` (`Options`:
@@ -401,11 +416,12 @@ request through the code.
   made-up programs); this repo's `main.go` runs it and `connector.go` lists this repo's program,
   test fields and `checkOutbound`, which runs `Request` once in the SDK's test
   activity environment. A test runs against `settings.Map` built from the process's environment with
-  the page's values in place of every variable `Settings` owns; nothing calls `os.Setenv`. External
+  the page's values in place of every variable `setup.Outbound` owns; nothing calls `os.Setenv`. External
   variables (the proxies) come from the process's environment only: the page shows them read-only,
   masked, and `/api/test` refuses them. The page shows what the Temporal profile file sets
   (with envconfig's loader), and the Temporal check says which profile it read. configui must not
-  make its own client (`TestNoOwnClient`): its checks go through `NewWithEnv`.
+  make its own client (`TestNoOwnClient`): its checks go through `setup.Outbound.Load` and
+  `httpconnector.New`.
 - `testcaller/` — test only: `CallerWorkflow(req, timeout)` (the Nexus operation timeout; 0 for
   none), a worker, a starter, and the end-to-end tests. `ClientOptions` (worker and starter)
   encrypts with the demo codec when `DEMO_ENCRYPTION_KEY` is set, in a block marked
@@ -422,14 +438,18 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
 - `httpconnector/` — `Request` in the SDK's activity test environment against `httptest`
   servers (helpers `runRequest`, `appErr`, `countingServer`), plus `Validate` and
   `categorizeError`. The limiter takes an explicit `now` (`ratelimiter_test.go`). Tests use
-  `newWithWindow(testWindow)` rather than the environment variable; it allows no secret anywhere,
+  `newWithWindow(testWindow)` (in `http_test.go`, which calls `New` with a `Config`) rather than
+  the environment variables; it allows no secret anywhere,
   so tests that send secrets but aren't about their domains wrap it in `anySecretHost`.
   `secretdomains_test.go` tries to send secrets to hosts their lists don't hold.
+- `setup/` — each variable's parse function and default (`TestConfig_Defaults` asserts the
+  default limit, 25h, and attempt, 60s), every problem reported at once, and that `Config` reads
+  only the env it is given.
 - `nexus-connector-shared/` — its own tests, including `settings/nobypass_test.go`, which parses
   every non-test Go file and fails on a direct environment read outside `settings/env.go`, and the
   setup page's generic tests (local only, bad requests, the profile file, external variables).
 - `configui/` — the settings JSON (every variable in order, secrets only as set or not, external
-  variables masked), the proxy variables refused, the Settings check matching `NewWithEnv`'s error line for
+  variables masked), the proxy variables refused, the Settings check matching `setup.Outbound.Load`'s error line for
   line, a test request with a typed and a kept secret that never come back, the Temporal check
   against a dev server (skipped with `-short`), and `TestNoOwnClient`. `configui/gendocs` fails if docs/setup.md is stale.
 - `testcaller/e2e_test.go` — starts a dev server with the `temporal` CLI (skipped if it isn't on

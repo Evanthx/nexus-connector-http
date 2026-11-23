@@ -3,7 +3,7 @@
 //
 // It connects with the standard Temporal client configuration: the TEMPORAL_* environment
 // variables and the profile file the temporal CLI uses. The namespace defaults to
-// connectors. Every variable it reads is listed in httpconnector.Settings.
+// connectors. Every variable it reads is listed in setup.Outbound.
 package main
 
 import (
@@ -26,7 +26,7 @@ func main() {
 
 	env := settings.OS()
 	s := startup.New("Outbound Connector", env)
-	connector, err := httpconnector.NewWithEnv(env)
+	cfg, err := configFrom(env)
 	s.Config(err)
 	opts, c := s.Temporal()
 	if err := s.Problems(); err != nil {
@@ -34,10 +34,9 @@ func main() {
 	}
 	defer c.Close()
 
+	connector := httpconnector.New(cfg, env)
 	w := worker.New(c, httpconnector.TaskQueue, worker.Options{})
-	if err := httpconnector.Register(w); err != nil {
-		log.Fatalf("Failed to configure the Outbound Connector: %v", err)
-	}
+	httpconnector.Register(w, connector)
 
 	log.Print(connector.Report(opts))
 	if err := s.Ready(ctx); err != nil {

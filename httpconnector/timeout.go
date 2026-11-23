@@ -12,19 +12,17 @@ import (
 // 1. It applies when the caller's Nexus operation has longer left, or no timeout.
 const MaxDurationEnvVar = "HTTP_CONNECTOR_MAX_DURATION_MINUTES"
 
-// defaultMaxDuration is the maximum when MaxDurationEnvVar is unset or empty.
-const defaultMaxDuration = 25 * time.Hour
-
 // AttemptTimeoutEnvVar names the environment variable on the Outbound Connector that sets how long one
-// attempt may take, in whole seconds, at least minAttemptTimeout. Each HTTP request gets
+// attempt may take, in whole seconds, at least MinAttemptTimeout. Each HTTP request gets
 // requestMargin less, so it times out, with the Outbound Connector's own error, before the attempt does.
 const AttemptTimeoutEnvVar = "HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS"
 
 const (
-	// defaultAttemptTimeout is the attempt timeout when AttemptTimeoutEnvVar is unset or empty.
-	defaultAttemptTimeout = 60 * time.Second
-	// minAttemptTimeout leaves each request at least 5s.
-	minAttemptTimeout = 10 * time.Second
+	// DefaultAttemptTimeout is the attempt timeout when AttemptTimeoutEnvVar is unset or empty.
+	DefaultAttemptTimeout = 60 * time.Second
+	// MinAttemptTimeout is the shortest AttemptTimeoutEnvVar allows: it leaves each request at
+	// least 5s.
+	MinAttemptTimeout = 10 * time.Second
 	// requestMargin is how much shorter than the attempt each HTTP request's timeout is: time to
 	// redact the result and report it to the server once the request has timed out.
 	requestMargin = 5 * time.Second

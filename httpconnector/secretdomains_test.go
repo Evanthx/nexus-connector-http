@@ -10,7 +10,7 @@ import (
 )
 
 func TestReadSecretDomains(t *testing.T) {
-	domains, err := readSecretDomains([]string{
+	domains, err := ReadSecretDomains([]string{
 		"HOME=/home/x",
 		"HTTP_CONNECTOR_ALLOWED_DOMAINS=example.com",
 		"HTTP_CONNECTOR_SECRET_STRIPE=sk_test",
@@ -35,7 +35,7 @@ func TestReadSecretDomains(t *testing.T) {
 // Every problem is reported at once, naming variables but never a value, even a secret put in a
 // list's variable by mistake.
 func TestReadSecretDomains_ReportsEveryProblem(t *testing.T) {
-	_, err := readSecretDomains([]string{
+	_, err := ReadSecretDomains([]string{
 		"HTTP_CONNECTOR_SECRET_NOLIST=a",
 		"HTTP_CONNECTOR_SECRET_EMPTYLIST=b",
 		"HTTP_CONNECTOR_SECRET_EMPTYLIST_DOMAINS=  ",
@@ -65,19 +65,6 @@ func TestReadSecretDomains_ReportsEveryProblem(t *testing.T) {
 	require.Len(t, strings.Split(err.Error(), "\n"), 7, "one line per problem: %v", err)
 	require.NotContains(t, err.Error(), "sk_live_abc123")
 	require.NotContains(t, err.Error(), "HTTP_CONNECTOR_SECRET_X needs", "X has its list")
-}
-
-// New reads every secret's list, and refuses to start without one.
-func TestNew_SecretDomains(t *testing.T) {
-	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
-	t.Setenv(SecretEnvPrefix+"NEWTEST", "v")
-	_, err := New()
-	require.ErrorContains(t, err, SecretEnvPrefix+"NEWTEST needs "+SecretEnvPrefix+"NEWTEST_DOMAINS")
-
-	t.Setenv(SecretEnvPrefix+"NEWTEST_DOMAINS", "api.example.com")
-	a, err := New()
-	require.NoError(t, err)
-	require.Equal(t, []string{"api.example.com"}, a.secretDomains[SecretEnvPrefix+"NEWTEST"])
 }
 
 func TestCheckSecretDomains(t *testing.T) {
@@ -226,18 +213,18 @@ func TestParseDomains_SaysWhatIsWrong(t *testing.T) {
 		"sk_live_abc123":          "is a secret in this variable by mistake?",
 		"api.example.com,":        "entry 2 isn't a domain: it is empty",
 	} {
-		_, err := parseDomains("HTTP_CONNECTOR_SECRET_X_DOMAINS", entry, false)
+		_, err := ParseDomains("HTTP_CONNECTOR_SECRET_X_DOMAINS", entry, false)
 		require.ErrorContains(t, err, want, entry)
 		require.NotContains(t, err.Error(), strings.TrimSuffix(entry, ","), "the entry isn't quoted")
 	}
 	// The allowlist holds no secrets, so it quotes the entry, with the same reason.
-	_, err := parseDomains(AllowedDomainsEnvVar, "https://api.example.com", true)
+	_, err := ParseDomains(AllowedDomainsEnvVar, "https://api.example.com", true)
 	require.ErrorContains(t, err, `"https://api.example.com" isn't a domain: it has a scheme`)
 }
 
 // _DOMAIN for _DOMAINS is reported as a misspelling, not as a secret needing a list of its own.
 func TestReadSecretDomains_SingularSuffixIsAMisspelling(t *testing.T) {
-	_, err := readSecretDomains([]string{
+	_, err := ReadSecretDomains([]string{
 		"HTTP_CONNECTOR_SECRET_GOOGLE=AIza",
 		"HTTP_CONNECTOR_SECRET_GOOGLE_DOMAIN=googleapis.com",
 	})
@@ -245,9 +232,26 @@ func TestReadSecretDomains_SingularSuffixIsAMisspelling(t *testing.T) {
 	require.NotContains(t, err.Error(), "_DOMAIN_DOMAINS")
 
 	// A secret whose own name ends in _DOMAIN, with its list, is fine.
-	_, err = readSecretDomains([]string{
+	_, err = ReadSecretDomains([]string{
 		"HTTP_CONNECTOR_SECRET_CUSTOM_DOMAIN=v",
 		"HTTP_CONNECTOR_SECRET_CUSTOM_DOMAIN_DOMAINS=api.example.com",
 	})
 	require.NoError(t, err)
+}
+
+func TestCheckSecretsAllowed(t *testing.T) {
+	a := newWithWindow(testWindow)
+	a.domains = []string{"stripe.com", "10.0.0.5"}
+	a.secretDomains = map[string][]string{
+		SecretEnvPrefix + "STRIPE": {"api.stripe.com", "stripe.com"},
+		SecretEnvPrefix + "ANY":    nil,
+		SecretEnvPrefix + "LAN":    {"10.0.0.5", "10.0.0.6"},
+		SecretEnvPrefix + "OTHER":  {"example.com"},
+	}
+	require.EqualError(t, a.CheckSecretsAllowed(),
+		`HTTP_CONNECTOR_SECRET_LAN_DOMAINS lists "10.0.0.6", which isn't within HTTP_CONNECTOR_ALLOWED_DOMAINS, so the Outbound Connector won't call it`+"\n"+
+			`HTTP_CONNECTOR_SECRET_OTHER_DOMAINS lists "example.com", which isn't within HTTP_CONNECTOR_ALLOWED_DOMAINS, so the Outbound Connector won't call it`)
+
+	a.domains = nil
+	require.NoError(t, a.CheckSecretsAllowed(), "the allowlist is disabled")
 }

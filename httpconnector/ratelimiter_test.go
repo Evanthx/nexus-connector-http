@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 )
 
 func TestLimiterTTL(t *testing.T) {
@@ -57,35 +56,4 @@ func TestLimiterMarkEvictsExpired(t *testing.T) {
 	l.mark("c", base.Add(time.Minute), l.ttl) // a has expired; b hasn't
 	require.Len(t, l.until, 2)
 	require.Equal(t, 30*time.Second, l.remaining("b", base.Add(time.Minute)))
-}
-
-func TestRateLimitWindow(t *testing.T) {
-	t.Setenv(RateLimitMinutesEnvVar, "")
-	window, err := rateLimitSetting.Get(settings.OS())
-	require.NoError(t, err)
-	require.Equal(t, 5*time.Minute, window, "unset defaults to 5 minutes")
-
-	t.Setenv(RateLimitMinutesEnvVar, "2")
-	window, err = rateLimitSetting.Get(settings.OS())
-	require.NoError(t, err)
-	require.Equal(t, 2*time.Minute, window)
-
-	for _, bad := range []string{"0", "-1", "1.5", "five", " 2"} {
-		t.Setenv(RateLimitMinutesEnvVar, bad)
-		_, err := rateLimitSetting.Get(settings.OS())
-		require.ErrorContains(t, err, RateLimitMinutesEnvVar, "value %q", bad)
-	}
-}
-
-// New reads the window from the environment, and fails on an invalid one.
-func TestNew_RateLimitWindow(t *testing.T) {
-	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
-	t.Setenv(RateLimitMinutesEnvVar, "3")
-	a, err := New()
-	require.NoError(t, err)
-	require.Equal(t, 3*time.Minute, a.lim.ttl)
-
-	t.Setenv(RateLimitMinutesEnvVar, "0")
-	_, err = New()
-	require.Error(t, err)
 }

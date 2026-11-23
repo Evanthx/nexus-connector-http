@@ -3,6 +3,7 @@ package httpconnector
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
@@ -37,11 +38,10 @@ func TestDescribe(t *testing.T) {
 
 // Describe names secrets and domains, never a secret's value.
 func TestDescribe_NoSecretValues(t *testing.T) {
-	t.Setenv(AllowedDomainsEnvVar, "api.stripe.com")
-	t.Setenv("HTTP_CONNECTOR_SECRET_DESCRIBE", "sk_live_never_logged")
-	t.Setenv("HTTP_CONNECTOR_SECRET_DESCRIBE_DOMAINS", "api.stripe.com")
-	a, err := New()
-	require.NoError(t, err)
+	a := New(Config{
+		AllowedDomains: []string{"api.stripe.com"},
+		SecretDomains:  map[string][]string{"HTTP_CONNECTOR_SECRET_DESCRIBE": {"api.stripe.com"}},
+	}, settings.Map{"HTTP_CONNECTOR_SECRET_DESCRIBE": "sk_live_never_logged"})
 	for _, line := range a.Describe() {
 		require.NotContains(t, line, "sk_live_never_logged")
 	}
@@ -58,8 +58,13 @@ func TestReport(t *testing.T) {
 		"HTTP_CONNECTOR_SECRET_STRIPE":         "sk_live_never_logged",
 		"HTTP_CONNECTOR_SECRET_STRIPE_DOMAINS": "api.stripe.com",
 	}
-	a, err := NewWithEnv(env)
-	require.NoError(t, err)
+	a := New(Config{
+		AllowedDomains:  []string{"api.stripe.com"},
+		AttemptTimeout:  30 * time.Second,
+		RateLimitWindow: 5 * time.Minute,
+		MaxDuration:     25 * time.Hour,
+		SecretDomains:   map[string][]string{"HTTP_CONNECTOR_SECRET_STRIPE": {"api.stripe.com"}},
+	}, env)
 	opts, err := temporalclient.Options(env)
 	require.NoError(t, err)
 	require.Equal(t, `Outbound Connector configuration (values marked "default" come from variables that aren't set):
@@ -68,8 +73,8 @@ func TestReport(t *testing.T) {
   Requests
     HTTP_CONNECTOR_ALLOW_REDIRECTS          false (default)
     HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS  30s
-    HTTP_CONNECTOR_RATE_LIMIT_MINUTES       5m0s (default)
-    HTTP_CONNECTOR_MAX_DURATION_MINUTES     25h0m0s (default)
+    HTTP_CONNECTOR_RATE_LIMIT_MINUTES       5m (default)
+    HTTP_CONNECTOR_MAX_DURATION_MINUTES     25h (default)
   Temporal
     namespace                               connectors (default)
     address                                 localhost:7233 (default)

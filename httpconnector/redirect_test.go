@@ -9,29 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
-	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 )
-
-func TestAllowRedirects(t *testing.T) {
-	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
-	for v, want := range map[string]bool{"": false, " ": false, "false": false, "0": false, "true": true, "TRUE": true, " 1 ": true} {
-		t.Setenv(AllowRedirectsEnvVar, v)
-		got, err := allowRedirectsSetting.Get(settings.OS())
-		require.NoError(t, err, "value %q", v)
-		require.Equal(t, want, got, "value %q", v)
-	}
-	for _, bad := range []string{"yes", "on", "WHITELISTED"} {
-		t.Setenv(AllowRedirectsEnvVar, bad)
-		_, err := allowRedirectsSetting.Get(settings.OS())
-		require.ErrorContains(t, err, AllowRedirectsEnvVar, "value %q", bad)
-		_, err = New()
-		require.Error(t, err, "New with value %q", bad)
-	}
-	t.Setenv(AllowRedirectsEnvVar, "true")
-	a, err := New()
-	require.NoError(t, err)
-	require.True(t, a.allowRedirects)
-}
 
 // By default no redirect is followed, even to the same host: the 3xx fails as a ClientError with
 // its response, and its target never gets the request.

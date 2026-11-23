@@ -17,6 +17,7 @@ import (
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/configui"
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 	ct "github.com/temporalio/nexus-connector-http/nexus-connector-shared/test/configuitest"
+	"github.com/temporalio/nexus-connector-http/setup"
 	nexuspb "go.temporal.io/api/nexus/v1"
 	"go.temporal.io/api/operatorservice/v1"
 	"go.temporal.io/sdk/client"
@@ -69,7 +70,7 @@ func TestSettings_JSON(t *testing.T) {
 		}
 	}
 	var want []string
-	for _, v := range httpconnector.Settings.Variables() {
+	for _, v := range setup.Outbound.Variables() {
 		want = append(want, v.Name)
 	}
 	require.Equal(t, want, names, "every variable in the settings list, in its order")
@@ -135,7 +136,7 @@ func TestSettings_JSON(t *testing.T) {
 
 // The Settings check reports exactly what the Outbound Connector would at startup, every problem at once.
 func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
-	ct.SetTemporalTimeout(t, time.Second)
+	programs := ct.WithTemporalTimeout(programs, time.Second)
 	values := map[string]string{
 		httpconnector.AllowedDomainsEnvVar:   "https://example.com",
 		httpconnector.RateLimitMinutesEnvVar: "0",
@@ -146,7 +147,7 @@ func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
 	_, resp := ct.PostTest(t, configui.NewServer(pageTitle, ct.BaseEnv(t, nil), programs), configui.TestRequest{Program: "outbound", Values: values})
 	require.False(t, resp.OK)
 
-	_, startupErr := httpconnector.NewWithEnv(settings.Map(values))
+	_, startupErr := setup.Outbound.Load(settings.Map(values))
 	require.Error(t, startupErr)
 	require.Equal(t, strings.Split(startupErr.Error(), "\n"), ct.CheckTitled(t, resp, "Settings").Problems)
 	require.Len(t, ct.CheckTitled(t, resp, "Settings").Problems, 4)
@@ -157,7 +158,7 @@ func TestTest_ReportsEverySettingsProblemAsStartupDoes(t *testing.T) {
 // A secret typed on the page is used for the test request and never comes back; a kept one is
 // read where configui runs and never comes back either.
 func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
-	ct.SetTemporalTimeout(t, time.Second)
+	programs := ct.WithTemporalTimeout(programs, time.Second)
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -209,7 +210,7 @@ func TestTest_SendsARequestWithPageValuesAndNeverReturnsSecrets(t *testing.T) {
 // A request the Outbound Connector refuses shows its error, and a secret's domain the allowlist doesn't
 // allow is a problem.
 func TestTest_ConnectorProblems(t *testing.T) {
-	ct.SetTemporalTimeout(t, time.Second)
+	programs := ct.WithTemporalTimeout(programs, time.Second)
 	_, resp := ct.PostTest(t, configui.NewServer(pageTitle, ct.BaseEnv(t, nil), programs), configui.TestRequest{
 		Program: "outbound",
 		Values: map[string]string{
@@ -238,7 +239,7 @@ func TestTest_Temporal(t *testing.T) {
 	if err != nil {
 		t.Skip("the temporal CLI is not on the PATH")
 	}
-	ct.SetTemporalTimeout(t, 10*time.Second)
+	programs := ct.WithTemporalTimeout(programs, 10*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{
@@ -295,7 +296,7 @@ func TestTest_ExternalVariables(t *testing.T) {
 	}
 }
 
-// The page's checks go through httpconnector (NewWithEnv, Request), not a client of the page's own.
+// The page's checks go through setup and httpconnector (Outbound.Load, New, Request), not a client of the page's own.
 func TestNoOwnClient(t *testing.T) {
 	ct.RequireNoOwnClient(t, ".", connectorClientMakers...)
 }

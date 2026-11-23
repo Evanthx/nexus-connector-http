@@ -1,7 +1,7 @@
 package main
 
 // This file is what the setup page knows about this repo's program, the Outbound Connector, and the checks
-// particular to it. The variables themselves come from httpconnector.Settings. The rest of the page
+// particular to it. The variables themselves come from setup.Outbound. The rest of the page
 // is the configui package in nexus-connector-shared.
 
 import (
@@ -17,6 +17,7 @@ import (
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/configui"
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/temporalclient"
+	"github.com/temporalio/nexus-connector-http/setup"
 	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -25,7 +26,7 @@ import (
 const pageTitle = "HTTP connector setup"
 
 var programs = []configui.Program{{
-	Settings:                httpconnector.Settings,
+	Settings:                setup.Outbound,
 	ClientOptions:           temporalclient.Options,
 	TaskQueue:               func(settings.Env) string { return httpconnector.TaskQueue },
 	EndpointName:            "http-endpoint",
@@ -50,11 +51,12 @@ var programs = []configui.Program{{
 // sent through the Outbound Connector's Request activity.
 func checkOutbound(_ context.Context, env settings.Env, fields map[string]string) configui.Check {
 	c := configui.Check{Title: "Outbound Connector"}
-	a, err := httpconnector.NewWithEnv(env)
+	vals, err := setup.Outbound.Load(env)
 	if err != nil {
 		c.Skipped = "Fix the settings first."
 		return c
 	}
+	a := httpconnector.New(setup.Config(vals), env)
 	c.Passed = a.Describe()
 	if err := a.CheckSecretsAllowed(); err != nil {
 		c.Problems = strings.Split(err.Error(), "\n")

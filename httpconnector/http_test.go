@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
+	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -37,6 +38,31 @@ func anySecretHost(a *HTTPActivities) *HTTPActivities {
 
 // testWindow is the rate-limit window the tests use, independent of the environment.
 const testWindow = 2 * time.Minute
+
+// newWithWindow is HTTPActivities with the rate-limit window, any host allowed, no secret allowed
+// anywhere, the default attempt timeout and a 25-hour maximum, reading secrets from the process's
+// environment.
+func newWithWindow(window time.Duration) *HTTPActivities {
+	return New(Config{
+		RateLimitWindow: window,
+		AttemptTimeout:  DefaultAttemptTimeout,
+		MaxDuration:     25 * time.Hour,
+		SecretDomains:   map[string][]string{},
+	}, settings.OS())
+}
+
+// New reads the requests' secrets from the env it is given, not the process's.
+func TestNew_ReadsSecretsFromItsEnv(t *testing.T) {
+	t.Setenv(SecretEnvPrefix+"PAGE", "from_the_process")
+	env := settings.Map{SecretEnvPrefix + "PAGE": "from_the_env"}
+	a := New(Config{AttemptTimeout: DefaultAttemptTimeout, SecretDomains: map[string][]string{SecretEnvPrefix + "PAGE": nil}}, env)
+
+	req := httpapi.RequestInput{URL: "https://api.example.com", APIKeyEnvVar: new(SecretEnvPrefix + "PAGE")}
+	httpReq, err := build(t.Context(), a.env, req)
+	require.NoError(t, err)
+	require.Equal(t, "Bearer from_the_env", httpReq.Header.Get("Authorization"))
+	require.Equal(t, []string{"from_the_env"}, secrets(a.env, req))
+}
 
 // runRequest runs Request in the activity test environment, so activity.GetLogger works.
 // It runs against a, so the rate-limit cache keeps its state between calls.
@@ -947,17 +973,5 @@ func TestValidate(t *testing.T) {
 			}
 			require.ErrorContains(t, err, tc.wantErr)
 		})
-	}
-}
-
-// New checks every environment variable before failing, so one error names every invalid value.
-func TestNew_ReportsEveryInvalidValue(t *testing.T) {
-	t.Setenv(RateLimitMinutesEnvVar, "0")
-	t.Setenv(AllowedDomainsEnvVar, "")
-	t.Setenv(AllowRedirectsEnvVar, "yes")
-	t.Setenv(MaxDurationEnvVar, "1h")
-	_, err := New()
-	for _, name := range []string{RateLimitMinutesEnvVar, AllowedDomainsEnvVar, AllowRedirectsEnvVar, MaxDurationEnvVar} {
-		require.ErrorContains(t, err, name)
 	}
 }

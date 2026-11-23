@@ -25,7 +25,7 @@ clients: $(NEXGEN)
 	$(NEXGEN) typescript http.nexusrpc.yaml --output .build/clients/typescript/httpapi
 	$(NEXGEN) java http.nexusrpc.yaml --output .build/clients/java/httpapi --package-name com.example.httpapi
 
-# Regenerates docs/setup.md's tables of environment variables from httpconnector/settings.go.
+# Regenerates docs/setup.md's tables of environment variables from setup/settings.go.
 docs:
 	go run ./configui/gendocs --file docs/setup.md
 

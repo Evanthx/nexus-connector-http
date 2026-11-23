@@ -8,40 +8,18 @@ import (
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/deadline"
 )
 
-// The call ends deadline.CallbackMargin before the caller's operation times out, never takes longer than
-// the maximum, and is rejected when the operation hasn't time for one attempt plus the margin.
-func TestScheduleToClose(t *testing.T) {
+// A caller's operation too short for one attempt is rejected naming the variable that sets the
+// attempt's time; an unreadable header isn't. The limit's arithmetic is deadline.ScheduleToClose's.
+func TestScheduleToClose_NamesAttemptTimeout(t *testing.T) {
 	a := newWithWindow(testWindow)
-	a.maxTotal = 2 * time.Hour
 	a.attemptTimeout = 30 * time.Second
-	for _, tc := range []struct {
-		name    string
-		header  string
-		want    time.Duration
-		wantErr string // empty: accepted
-	}{
-		{"no operation timeout", "", 2 * time.Hour, ""},
-		{"operation shorter than the maximum", "3600000ms", time.Hour - deadline.CallbackMargin, ""},
-		{"operation longer than the maximum", "90000000ms", 2 * time.Hour, ""},
-		{"exactly one attempt plus the margin", "40s", 30 * time.Second, ""},
-		{"under one attempt plus the margin", "39999ms",
-			0, "invalid operation timeout: the caller's Nexus operation times out in 39.999s, which leaves no time for an attempt: " +
-				"it needs at least one attempt (30s) plus 10s for the result to reach the caller; give the operation a longer timeout " +
-				"(one attempt's time is " + AttemptTimeoutEnvVar + ")"},
-		{"already timed out", "-1s", 0, "times out in -1s"},
-		{"unreadable header", "soon", 0, `invalid operation timeout: can't read the operation-timeout header "soon"`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := a.ScheduleToClose(tc.header)
-			if tc.wantErr != "" {
-				require.ErrorIs(t, err, deadline.ErrTooShort)
-				require.ErrorContains(t, err, tc.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
-		})
-	}
+	_, err := a.ScheduleToClose("39999ms")
+	require.ErrorIs(t, err, deadline.ErrTooShort)
+	require.ErrorContains(t, err, "(one attempt's time is "+AttemptTimeoutEnvVar+")")
+
+	_, err = a.ScheduleToClose("soon")
+	require.ErrorIs(t, err, deadline.ErrTooShort)
+	require.NotContains(t, err.Error(), AttemptTimeoutEnvVar)
 }
 
 // Each attempt may take the attempt timeout; the whole call, scheduleToClose.
@@ -53,45 +31,10 @@ func TestActivityOptions_Timeouts(t *testing.T) {
 	require.Equal(t, 10*time.Minute, opts.ScheduleToCloseTimeout)
 }
 
-// New reads the attempt timeout from the environment, 60 seconds if unset, and fails on an
-// invalid one. Each request gets 5 seconds less.
-func TestNew_AttemptTimeout(t *testing.T) {
-	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
-	t.Setenv(AttemptTimeoutEnvVar, "")
-	a, err := New()
-	require.NoError(t, err)
-	require.Equal(t, 60*time.Second, a.attemptTimeout)
+// Each request gets requestMargin less than the attempt.
+func TestRequestTimeout(t *testing.T) {
+	a := newWithWindow(testWindow)
 	require.Equal(t, 55*time.Second, a.requestTimeout())
-
-	t.Setenv(AttemptTimeoutEnvVar, "10")
-	a, err = New()
-	require.NoError(t, err)
-	require.Equal(t, 10*time.Second, a.attemptTimeout)
+	a.attemptTimeout = MinAttemptTimeout
 	require.Equal(t, 5*time.Second, a.requestTimeout())
-
-	for _, bad := range []string{"9", "0", "-1", "1.5", "30s", " 30"} {
-		t.Setenv(AttemptTimeoutEnvVar, bad)
-		_, err := New()
-		require.ErrorContains(t, err, AttemptTimeoutEnvVar, "value %q", bad)
-	}
-}
-
-// New reads the maximum from the environment, 25 hours if unset, and fails on an invalid one.
-func TestNew_MaxDuration(t *testing.T) {
-	t.Setenv(AllowedDomainsEnvVar, DisableAllowlist)
-	t.Setenv(MaxDurationEnvVar, "")
-	a, err := New()
-	require.NoError(t, err)
-	require.Equal(t, 25*time.Hour, a.maxTotal)
-
-	t.Setenv(MaxDurationEnvVar, "90")
-	a, err = New()
-	require.NoError(t, err)
-	require.Equal(t, 90*time.Minute, a.maxTotal)
-
-	for _, bad := range []string{"0", "-1", "1.5", "1h", " 2"} {
-		t.Setenv(MaxDurationEnvVar, bad)
-		_, err := New()
-		require.ErrorContains(t, err, MaxDurationEnvVar, "value %q", bad)
-	}
 }

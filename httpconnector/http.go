@@ -6,15 +6,12 @@ package httpconnector
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
@@ -41,44 +38,46 @@ type HTTPActivities struct {
 	// secretDomains maps each secret variable to the domains it may be sent to (SecretDomainsSuffix);
 	// a nil list allows any allowed host. A variable not in it isn't sent anywhere.
 	secretDomains map[string][]string
-	// env is where secrets are read from when a request names one: the process's environment,
-	// unless NewWithEnv was given another.
+	// env is where secrets are read from when a request names one.
 	env settings.Env
 }
 
-// New returns HTTPActivities configured from the process's environment: see NewWithEnv.
-func New() (*HTTPActivities, error) {
-	return NewWithEnv(settings.OS())
+// Config is the Outbound Connector's configuration. The setup package reads it from the
+// environment variables named here, checking each.
+type Config struct {
+	// AllowedDomains are the hosts requests may go to, each with its subdomains
+	// (AllowedDomainsEnvVar), lower case; nil allows any host (DisableAllowlist).
+	AllowedDomains []string
+	// AllowRedirects is whether redirects are followed (AllowRedirectsEnvVar; see checkRedirect).
+	AllowRedirects bool
+	// AttemptTimeout is the longest one attempt may take (AttemptTimeoutEnvVar), at least
+	// MinAttemptTimeout.
+	AttemptTimeout time.Duration
+	// RateLimitWindow is how long a key stays rate-limited after a 429 (RateLimitMinutesEnvVar).
+	RateLimitWindow time.Duration
+	// MaxDuration is the longest a call may take in all (MaxDurationEnvVar).
+	MaxDuration time.Duration
+	// SecretDomains maps each secret variable to the domains it may be sent to, from its
+	// SecretDomainsSuffix variable (see ReadSecretDomains); nil allows any allowed host.
+	SecretDomains map[string][]string
 }
 
-// NewWithEnv returns HTTPActivities with an empty rate-limit cache, configured from env through
-// Settings: the rate-limit window from RateLimitMinutesEnvVar, the allowed domains from
-// AllowedDomainsEnvVar, whether to follow redirects from AllowRedirectsEnvVar, the longest a call
-// may take from MaxDurationEnvVar, the longest one attempt may take from AttemptTimeoutEnvVar, and the domains each secret variable may be sent to from its
-// SecretDomainsSuffix variable. Requests' secrets are read from env too. It checks every variable,
-// so the error names every invalid value at once, one per line.
-func NewWithEnv(env settings.Env) (*HTTPActivities, error) {
-	vals, err := Settings.Load(env)
-	if err != nil {
-		return nil, err
+// New returns HTTPActivities with cfg and an empty rate-limit cache. Requests' secrets are read
+// from env when a request names one.
+func New(cfg Config, env settings.Env) *HTTPActivities {
+	return &HTTPActivities{
+		lim:            newLimiter(cfg.RateLimitWindow),
+		domains:        cfg.AllowedDomains,
+		allowRedirects: cfg.AllowRedirects,
+		maxTotal:       cfg.MaxDuration,
+		attemptTimeout: cfg.AttemptTimeout,
+		secretDomains:  cfg.SecretDomains,
+		env:            env,
 	}
-	a := newWithWindow(rateLimitSetting.From(vals))
-	a.domains = allowedDomainsSetting.From(vals)
-	a.allowRedirects = allowRedirectsSetting.From(vals)
-	a.maxTotal = maxDurationSetting.From(vals)
-	a.attemptTimeout = attemptTimeoutSetting.From(vals)
-	a.secretDomains = secretsFamily.From(vals)
-	a.env = env
-	return a, nil
-}
-
-func newWithWindow(window time.Duration) *HTTPActivities {
-	return &HTTPActivities{lim: newLimiter(window), maxTotal: defaultMaxDuration, attemptTimeout: defaultAttemptTimeout, secretDomains: map[string][]string{}, env: settings.OS()}
 }
 
 // Register registers the HTTPService Nexus service and the Request activity its operation
-// starts on w. Both use one HTTPActivities, so every call on the worker shares one rate-limit
-// cache. It fails if one of the environment variables New reads is invalid.
+// starts on w. Both use a, so every call on the worker shares one rate-limit cache.
 //
 // The request operation rejects a request that can't be made, whose host isn't an allowed
 // domain (see CheckDomain), that names a secret its host may not be sent (see CheckSecretDomains),
@@ -87,11 +86,7 @@ func newWithWindow(window time.Duration) *HTTPActivities {
 // it starts Request as a standalone activity that ends shortly before the operation times out.
 // The activity ID comes from the Nexus request ID, so a retried start of the same operation
 // reaches the same activity.
-func Register(w worker.Registry) error {
-	a, err := New()
-	if err != nil {
-		return err
-	}
+func Register(w worker.Registry, a *HTTPActivities) {
 	op := temporalnexus.MustNewTemporalOperation(temporalnexus.TemporalOperationOptions[httpapi.RequestInput, httpapi.RequestOutput]{
 		Name: httpapi.HTTPService.Request.Name(),
 		Start: func(
@@ -124,7 +119,6 @@ func Register(w worker.Registry) error {
 	svc.MustRegister(op)
 	w.RegisterNexusService(svc)
 	w.RegisterActivity(a.Request)
-	return nil
 }
 
 // The retry policy backs off from backoffInitial, three times longer each attempt, up to
@@ -342,38 +336,4 @@ func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.RequestInp
 func timedOut(err error, start time.Time, timeout time.Duration) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout
-}
-
-// redact replaces every secret in s with [REDACTED], in each form it can take in a response or an
-// error message: as is, escaped in a query or path, quoted by Go, and escaped in a JSON string.
-func redact(s string, secrets []string) string {
-	for _, secret := range secrets {
-		quoted := strconv.Quote(secret)
-		inJSON, _ := json.Marshal(secret) // a string always marshals
-		for _, form := range []string{
-			secret,
-			url.QueryEscape(secret),
-			url.PathEscape(secret),
-			quoted[1 : len(quoted)-1],
-			string(inJSON[1 : len(inJSON)-1]),
-		} {
-			s = strings.ReplaceAll(s, form, "[REDACTED]")
-		}
-	}
-	return s
-}
-
-// redactResponse redacts secrets from everything in out that came from the endpoint, which can
-// echo what it was sent.
-func redactResponse(out *httpapi.RequestOutput, secrets []string) {
-	if len(secrets) == 0 {
-		return
-	}
-	out.Status = redact(out.Status, secrets)
-	out.Body = redact(out.Body, secrets)
-	for _, vs := range out.Headers.AdditionalProperties {
-		for i, v := range vs {
-			vs[i] = redact(v, secrets)
-		}
-	}
 }

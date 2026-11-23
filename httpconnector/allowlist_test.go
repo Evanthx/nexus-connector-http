@@ -8,55 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
-	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 )
-
-func TestAllowedDomains(t *testing.T) {
-	for _, unset := range []string{"", "  "} {
-		t.Setenv(AllowedDomainsEnvVar, unset)
-		_, err := allowedDomainsSetting.Get(settings.OS())
-		require.ErrorContains(t, err, AllowedDomainsEnvVar+" is required", "value %q", unset)
-	}
-
-	for _, disable := range []string{DisableAllowlist, " disable allowlist "} {
-		t.Setenv(AllowedDomainsEnvVar, disable)
-		domains, err := allowedDomainsSetting.Get(settings.OS())
-		require.NoError(t, err)
-		require.Nil(t, domains, "value %q allows any host", disable)
-	}
-
-	t.Setenv(AllowedDomainsEnvVar, " temporal.io,Google.com ,  stripe.com.,10.0.0.5")
-	domains, err := allowedDomainsSetting.Get(settings.OS())
-	require.NoError(t, err)
-	require.Equal(t, []string{"temporal.io", "google.com", "stripe.com", "10.0.0.5"}, domains)
-
-	for _, bad := range []string{
-		"temporal.io,", "a.com,,b.com", "https://temporal.io", "temporal.io:443", "temporal.io/docs",
-		"*.temporal.io", ".temporal.io", "temporal..io", "temporal io", "temporal.io," + DisableAllowlist,
-		"com", "temporal.io,io", "localhost", "*", "",
-		// A last label of digits makes an IPv4 address, which must be complete and valid.
-		"0.5", "10.0", "168.0.5", "300.1.1.1", "1.2.3.4.5", "example.123",
-	} {
-		t.Setenv(AllowedDomainsEnvVar, bad)
-		_, err := allowedDomainsSetting.Get(settings.OS())
-		require.ErrorContains(t, err, AllowedDomainsEnvVar, "value %q", bad)
-	}
-}
-
-func TestNew_AllowedDomains(t *testing.T) {
-	t.Setenv(AllowedDomainsEnvVar, "temporal.io")
-	a, err := New()
-	require.NoError(t, err)
-	require.Equal(t, []string{"temporal.io"}, a.domains)
-
-	t.Setenv(AllowedDomainsEnvVar, "https://temporal.io")
-	_, err = New()
-	require.Error(t, err)
-
-	t.Setenv(AllowedDomainsEnvVar, "")
-	_, err = New()
-	require.ErrorContains(t, err, AllowedDomainsEnvVar+" is required")
-}
 
 func TestCheckDomain(t *testing.T) {
 	a := newWithWindow(testWindow)

@@ -102,5 +102,6 @@ go test ./httpconnector -run TestRequest_429CachesKey -v # single test
 The test suites are:
 
 - **`httpconnector/`** runs `Request` in the SDK's activity test environment against local `httptest` servers. It covers GET and POST responses, status classification, retry delays, timeouts, the rate-limit cache, API keys, redirects, redaction, and input validation.
+- **`setup/`** checks every environment variable's parsing and defaults, and that `Config` reads only the environment it is given.
 
 - **`testcaller/e2e_test.go`** starts a dev server with the `temporal` CLI, creates both namespaces and the endpoint, runs the Outbound Connector and the test caller in-process, and makes requests across the namespaces: a successful request, a 503 retried after 5 s, retries stopping before the caller's timeout, a 404 `ClientError` with its response in the error details, a caller timeout too short for one attempt rejected at start, an invalid request, and a domain not in the allowed list. `TestEndToEnd_EncryptedRequest` runs the Outbound Connector with a codec server and the test caller with the demo codec, and checks that the Nexus operation's and the activity's input and result, and a failed request's error details, are stored encrypted. Both are skipped automatically if `temporal` is not on `PATH`, or when run with `-short`.

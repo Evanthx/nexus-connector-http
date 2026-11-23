@@ -18,11 +18,11 @@ const AllowedDomainsEnvVar = "HTTP_CONNECTOR_ALLOWED_DOMAINS"
 // Outbound Connector calls any host. It must be the whole value; case and surrounding spaces are ignored.
 const DisableAllowlist = "DISABLE ALLOWLIST"
 
-// parseDomains reads v, the value of the variable name, as a list of domains: DisableAllowlist,
+// ParseDomains reads v, the value of the variable name, as a list of domains: DisableAllowlist,
 // which gives nil, or comma-separated domains, lower case and without spaces. An entry that isn't
-// a bare domain (see isDomain), or an empty entry, is an error, which quotes the entry only if
+// a bare domain (see domainProblem), or an empty entry, is an error, which quotes the entry only if
 // showEntries is set.
-func parseDomains(name, v string, showEntries bool) ([]string, error) {
+func ParseDomains(name, v string, showEntries bool) ([]string, error) {
 	v = strings.TrimSpace(v)
 	if strings.EqualFold(v, DisableAllowlist) {
 		return nil, nil

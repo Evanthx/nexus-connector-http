@@ -9,12 +9,12 @@ import (
 	"log"
 	"os"
 
-	"github.com/temporalio/nexus-connector-http/httpconnector"
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
+	"github.com/temporalio/nexus-connector-http/setup"
 )
 
 // programs are the programs whose variables the docs list, in order.
-var programs = []*settings.Program{httpconnector.Settings}
+var programs = []*settings.Program{setup.Outbound}
 
 func main() {
 	path := flag.String("file", "docs/setup.md", "the Markdown file to update")

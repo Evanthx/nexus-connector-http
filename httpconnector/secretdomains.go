@@ -18,14 +18,15 @@ import (
 // a list, never a secret.
 const SecretDomainsSuffix = "_DOMAINS"
 
-// readSecretDomains reads, for each secret variable in environ (name=value pairs, as
-// settings.Env.Environ returns them), the domains in its SecretDomainsSuffix variable. It is
-// secretsFamily's check, so New runs it through Settings. A secret variable is one that
+// ReadSecretDomains reads, for each secret variable in environ (name=value pairs, as
+// settings.Env.Environ returns them), the domains in its SecretDomainsSuffix variable: the
+// secrets' check in the setup package, which gives the result to New as Config.SecretDomains. A
+// secret variable is one that
 // starts with SecretEnvPrefix, doesn't end with SecretDomainsSuffix, and isn't empty. A nil list,
 // from DisableAllowlist, allows any host the allowlist allows. It reports every secret without a
 // valid list, and every list whose secret is unset or empty, in one error. The error names
 // variables, never values, in case a secret was put in a list's variable by mistake.
-func readSecretDomains(environ []string) (map[string][]string, error) {
+func ReadSecretDomains(environ []string) (map[string][]string, error) {
 	secretVars := make(map[string]bool)
 	lists := make(map[string]string) // secret variable → its list's value
 	for _, kv := range environ {
@@ -54,7 +55,7 @@ func readSecretDomains(environ []string) (map[string][]string, error) {
 				name, listVar, DisableAllowlist))
 			continue
 		}
-		d, err := parseDomains(listVar, v, false)
+		d, err := ParseDomains(listVar, v, false)
 		if err != nil {
 			errs = append(errs, err)
 			continue
