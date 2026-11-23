@@ -29,6 +29,8 @@ It runs as one program, the Outbound Connector, which runs as a Nexus operation 
 requests: it sends requests **out** of Temporal to the APIs you call. A workflow describes a request (URL, method, headers, body, and which API key to use)
 and calls the Outbound Connector's one operation, `HTTPService.request`. The Outbound Connector
 sends the request, retries it when retrying can help, and returns the response or the final error.
+It works on its own, but it is [best used as a building block](#best-used-as-a-building-block) for
+API-specific connectors.
 
 ```
  your namespace                         namespace: connectors
@@ -39,6 +41,50 @@ sends the request, retries it when retrying can help, and returns the response o
 │    body              │              └──────────────────────────────────────┘
 └──────────────────────┘
 ```
+
+## Best used as a building block
+
+**You can call the Outbound Connector directly as a generic HTTP connector, but it is far better
+used as the building block for an API-specific connector.**
+
+Because it is generic, the Outbound Connector can't know which URLs you will call or how each API
+authenticates. Every caller has to spell out the URL, method, headers, and which secret goes where,
+so every caller needs to know the API's HTTP details. That works, but it isn't a clean interface.
+
+So the Outbound Connector is also a Go library (`httpconnector`) that you can wrap. A thin
+connector for one API keeps all of the Outbound Connector's handling (retries, rate limiting,
+timeouts, secrets and redaction, the domain allowlist and redirect checks) and gives callers a
+typed interface for that API instead:
+
+- **One Nexus operation per thing callers need**, with API-specific inputs and outputs, such as
+  `getWeatherByZip(zip) → weather`. Callers never see a URL or a credential.
+- **Each operation maps its input onto an HTTP request** and names the secret to use and where
+  the API expects it. It never reads the secret itself. It sends the request with
+  `httpconnector`'s `Request`, called as a function inside its own activity.
+- **A standalone activity for one call, a workflow for several.** An operation that makes one
+  call is backed by a standalone activity. One that needs several calls can be backed by a
+  workflow that runs each call as its own activity, so Temporal orchestrates them and doesn't
+  repeat calls that already succeeded.
+- **Only those operations are exposed.** The generic `HTTPService.request` operation isn't
+  registered, so callers can make only the calls you chose, to the hosts you configured.
+
+```
+ your namespace                         namespace: connectors
+┌──────────────────────┐    Nexus     ┌──────────────────────────────────────┐
+│ your workflow        │────────────▶ │ WeatherService.getWeatherByZip       │
+│  getWeatherByZip(zip)│              │   activity: builds the request,      │
+│  → weather           │ ◀─────────── │   httpconnector.Request ──▶ HTTP API │
+└──────────────────────┘              └──────────────────────────────────────┘
+```
+
+**Sample code:** [nexus-connector-openapi](https://github.com/Evanthx/nexus-connector-openapi)
+shows how to wrap the Outbound Connector, and generates the wrapper from an API's OpenAPI spec. Its
+[examples](https://github.com/Evanthx/nexus-connector-openapi#the-examples) cover one call per
+operation, several calls in one activity, and several calls in a workflow, starting with a
+[weather API connector](https://github.com/Evanthx/nexus-connector-openapi/tree/main/apis/weather).
+[Wrapping the Outbound Connector](docs/how-it-works.md#apis-that-dont-follow-the-standard) lists
+the exported functions a wrapper uses, and how to handle APIs that report errors in a `200`
+response.
 
 ## The problem it solves
 
