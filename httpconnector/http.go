@@ -1,6 +1,8 @@
 // Package httpconnector is the HTTP connector: a Nexus service whose one operation, request,
-// is backed by a standalone activity, Request, which makes an HTTP request. There is no handler
-// workflow: the operation starts Request and completes when the activity does.
+// makes an HTTP request. Send is the request itself, with no Temporal context needed. The
+// operation runs it one of two ways, by Config.Mode: backed by a standalone activity, Request,
+// which the operation starts and completes with (ModeActivity, the default); or within the Nexus
+// request, with no activity (ModeSync, RequestSync). There is no handler workflow either way.
 package httpconnector
 
 import (
@@ -9,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,6 +22,7 @@ import (
 	"github.com/temporalio/nexus-connector-http/nexus-connector-shared/settings"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/temporalnexus"
 	"go.temporal.io/sdk/worker"
@@ -27,9 +31,11 @@ import (
 // TaskQueue is the Outbound Connector's task queue. The Nexus endpoint targets it.
 const TaskQueue = "nexus-connector-http"
 
-// HTTPActivities is the Request activity plus the rate-limit cache it shares across calls.
-// Register one instance per worker, so every call on that worker shares the cache.
+// HTTPActivities is the HTTP connector's calls, Send and its two ways to run, plus the rate-limit
+// cache they share. Register one instance per worker, so every call on that worker shares the
+// cache.
 type HTTPActivities struct {
+	mode           Mode // how the operation runs each call (ModeEnvVar)
 	lim            *limiter
 	domains        []string      // allowed domains; nil allows any host (DisableAllowlist)
 	allowRedirects bool          // whether redirects are followed
@@ -45,6 +51,8 @@ type HTTPActivities struct {
 // Config is the Outbound Connector's configuration. The setup package reads it from the
 // environment variables named here, checking each.
 type Config struct {
+	// Mode is how the request operation runs each call (ModeEnvVar); "" is ModeActivity.
+	Mode Mode
 	// AllowedDomains are the hosts requests may go to, each with its subdomains
 	// (AllowedDomainsEnvVar), lower case; nil allows any host (DisableAllowlist).
 	AllowedDomains []string
@@ -65,7 +73,12 @@ type Config struct {
 // New returns HTTPActivities with cfg and an empty rate-limit cache. Requests' secrets are read
 // from env when a request names one.
 func New(cfg Config, env settings.Env) *HTTPActivities {
+	mode := cfg.Mode
+	if mode == "" {
+		mode = ModeActivity
+	}
 	return &HTTPActivities{
+		mode:           mode,
 		lim:            newLimiter(cfg.RateLimitWindow),
 		domains:        cfg.AllowedDomains,
 		allowRedirects: cfg.AllowRedirects,
@@ -76,10 +89,13 @@ func New(cfg Config, env settings.Env) *HTTPActivities {
 	}
 }
 
-// Register registers the HTTPService Nexus service and the Request activity its operation
-// starts on w. Both use a, so every call on the worker shares one rate-limit cache.
+// Register registers the HTTPService Nexus service on w, with a's Mode. Everything uses a, so
+// every call on the worker shares one rate-limit cache.
 //
-// The request operation rejects a request that can't be made, whose host isn't an allowed
+// With ModeSync, the request operation is synchronous: RequestSync makes one attempt within the
+// Nexus request, and the caller's server retries a retryable failure. Nothing else is registered.
+//
+// With ModeActivity, the request operation rejects a request that can't be made, whose host isn't an allowed
 // domain (see CheckDomain), that names a secret its host may not be sent (see CheckSecretDomains),
 // or for which the caller's Nexus operation has too little time left
 // (see ScheduleToClose), with a BadRequest handler error, without starting an activity; otherwise
@@ -87,6 +103,15 @@ func New(cfg Config, env settings.Env) *HTTPActivities {
 // The activity ID comes from the Nexus request ID, so a retried start of the same operation
 // reaches the same activity.
 func Register(w worker.Registry, a *HTTPActivities) {
+	svc := nexus.NewService(httpapi.HTTPService.ServiceName)
+	if a.mode == ModeSync {
+		svc.MustRegister(nexus.NewSyncOperation(httpapi.HTTPService.Request.Name(),
+			func(ctx context.Context, req httpapi.RequestInput, _ nexus.StartOperationOptions) (httpapi.RequestOutput, error) {
+				return a.RequestSync(ctx, req)
+			}))
+		w.RegisterNexusService(svc)
+		return
+	}
 	op := temporalnexus.MustNewTemporalOperation(temporalnexus.TemporalOperationOptions[httpapi.RequestInput, httpapi.RequestOutput]{
 		Name: httpapi.HTTPService.Request.Name(),
 		Start: func(
@@ -115,10 +140,14 @@ func Register(w worker.Registry, a *HTTPActivities) {
 			return temporalnexus.StartActivity(ctx, nc, a.ActivityOptions("http-"+opts.RequestID, total), a.Request, req)
 		},
 	})
-	svc := nexus.NewService(httpapi.HTTPService.ServiceName)
 	svc.MustRegister(op)
 	w.RegisterNexusService(svc)
 	w.RegisterActivity(a.Request)
+}
+
+// Mode is how the request operation runs each call (ModeEnvVar).
+func (a *HTTPActivities) Mode() Mode {
+	return a.mode
 }
 
 // The retry policy backs off from backoffInitial, three times longer each attempt, up to
@@ -176,7 +205,16 @@ func categorizeError(status int) string {
 	return ErrorTypeClientError
 }
 
-// Request makes one HTTP attempt per activity attempt:
+// Request is the activity behind the request operation in ModeActivity: Send, once per activity
+// attempt. The activity's retry policy and the errors' NextRetryDelay do the retrying.
+func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
+	return a.Send(ctx, req)
+}
+
+// Send makes one HTTP attempt. It needs no Temporal context: an activity (Request), a synchronous
+// Nexus handler (RequestSync), or a library caller can run it. Its errors are ApplicationErrors
+// whose types and NextRetryDelay say how to retry; an activity returns them as they are, and
+// HandlerError turns them into a Nexus handler's.
 //
 //   - A request that can't be made, whose host isn't an allowed domain, or that names a secret
 //     its host may not be sent, fails with InvalidRequest, without being sent.
@@ -186,8 +224,8 @@ func categorizeError(status int) string {
 //     returns the response and clears the key. 429 marks the key and fails with RateLimited. Other
 //     statuses fail with ClientError or Transient (see categorizeError), with the response in the
 //     error's details.
-func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
-	logger := activity.GetLogger(ctx)
+func (a *HTTPActivities) Send(ctx context.Context, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
+	logger := loggerFor(ctx)
 
 	httpReq, err := build(ctx, a.env, req)
 	if err == nil {
@@ -281,12 +319,12 @@ func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) 
 	return out, nil
 }
 
-// ApplyStatus makes out, a response Request returned for req, count as if the endpoint had
-// answered with status. It is what Request itself does with every response, exported for an
-// activity that calls Request and finds the real answer in the body, such as a 200 whose body
+// ApplyStatus makes out, a response Send returned for req, count as if the endpoint had
+// answered with status. It is what Send itself does with every response, exported for code that
+// calls Send (or Request) and finds the real answer in the body, such as a 200 whose body
 // says the caller is rate limited:
 //
-//	resp, err := a.Request(ctx, req)
+//	resp, err := a.Send(ctx, req)
 //	if err == nil && bodySaysRateLimited(resp) {
 //		return nil, a.ApplyStatus(ctx, req, http.StatusTooManyRequests, resp)
 //	}
@@ -300,8 +338,8 @@ func (a *HTTPActivities) Request(ctx context.Context, req httpapi.RequestInput) 
 //   - Transient: the next attempt waits the retry policy's backoff.
 //   - ClientError: not retried.
 //
-// ctx must be the activity's context. out should be Request's response, which is already
-// redacted; ApplyStatus doesn't redact it again.
+// ctx is the caller's context: an activity's, a Nexus handler's, or any other. out should be Send's
+// response, which is already redacted; ApplyStatus doesn't redact it again.
 func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.RequestInput, status int, out httpapi.RequestOutput) error {
 	key := RateLimitKey(req)
 	if status >= 200 && status < 300 {
@@ -319,7 +357,7 @@ func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.RequestInp
 		now := time.Now()
 		wait := retryAfter(out, now, a.lim.ttl)
 		a.lim.mark(key, now, wait)
-		activity.GetLogger(ctx).Warn("Rate limited", "status", status, "key", key, "retryIn", wait.String())
+		loggerFor(ctx).Warn("Rate limited", "status", status, "key", key, "retryIn", wait.String())
 		return rateLimitedError(msg, wait, out)
 	}
 	if errType == ErrorTypeTransient {
@@ -336,4 +374,16 @@ func (a *HTTPActivities) ApplyStatus(ctx context.Context, req httpapi.RequestInp
 func timedOut(err error, start time.Time, timeout time.Duration) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout() && time.Since(start) >= timeout
+}
+
+// loggerFor is the logger for a call running with ctx: the activity's or the Nexus operation's,
+// with their tags, or else slog's default.
+func loggerFor(ctx context.Context) log.Logger {
+	switch {
+	case activity.IsActivity(ctx):
+		return activity.GetLogger(ctx)
+	case temporalnexus.IsNexusOperation(ctx):
+		return temporalnexus.GetLogger(ctx)
+	}
+	return log.NewStructuredLogger(slog.Default())
 }

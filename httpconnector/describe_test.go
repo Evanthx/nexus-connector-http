@@ -71,6 +71,7 @@ func TestReport(t *testing.T) {
   Allowed hosts
     HTTP_CONNECTOR_ALLOWED_DOMAINS          api.stripe.com
   Requests
+    HTTP_CONNECTOR_MODE                     activity (default)
     HTTP_CONNECTOR_ALLOW_REDIRECTS          false (default)
     HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS  30s
     HTTP_CONNECTOR_RATE_LIMIT_MINUTES       5m (default)
@@ -81,7 +82,13 @@ func TestReport(t *testing.T) {
     payload codec                           none: payloads go to Temporal as they are, unencrypted (set TEMPORAL_CODEC_ENDPOINT to encrypt them)
 What the Outbound Connector will do:
   - Serve the HTTPService Nexus service, with the operation request, and run requests on the task queue "nexus-connector-http": point the Outbound Connector's Nexus endpoint at it.
+  - Run each call as a standalone activity (HTTP_CONNECTOR_MODE=activity), retried with this connector's policy until 10 seconds before the caller's Nexus operation times out, or HTTP_CONNECTOR_MAX_DURATION_MINUTES.
   - Only calls to these domains are allowed (HTTP_CONNECTOR_ALLOWED_DOMAINS): api.stripe.com
   - Secret HTTP_CONNECTOR_SECRET_STRIPE may be sent to: api.stripe.com`, a.Report(opts))
 	require.NotContains(t, a.Report(opts), "sk_live_never_logged")
+
+	env[ModeEnvVar] = "sync"
+	a = New(Config{Mode: ModeSync, AllowedDomains: []string{"api.stripe.com"}, AttemptTimeout: 30 * time.Second}, env)
+	require.Contains(t, a.Report(opts), "HTTP_CONNECTOR_MODE                     sync\n")
+	require.Contains(t, a.Report(opts), "Run each call within its Nexus request, with no activity (HTTP_CONNECTOR_MODE=sync)")
 }

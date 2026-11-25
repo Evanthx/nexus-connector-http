@@ -21,7 +21,8 @@ nexus-connector-shared/     code every Go connector shares (settings, Temporal c
 docs/
   setup.md                  prerequisites, running locally, Temporal Cloud
   usage.md                  calling from Go and other languages, options, secrets
-  errors.md                 error types, timeouts, rate limiting, known limitations
+  errors.md                 error types, timeouts, rate limiting, activity or sync mode, known
+                            limitations
   testing.md                test workflow and test suites
   how-it-works.md           architecture, packages, path of a request, changing the contract
   troubleshooting.md        common errors and fixes
@@ -38,16 +39,28 @@ caller sends a `RequestInput` (URL, method, headers, query parameters, body, cre
 gets a `RequestOutput` (status, headers, body) back. It is write-only: it makes the request it is
 given and returns the response, and never polls.
 
-The operation is backed by a **standalone activity**, not a workflow: it calls
-`temporalnexus.StartActivity` to start `Request`, and the server completes the Nexus operation
-through a completion callback when the activity finishes. The server's activity retry policy does
-all retrying.
+`HTTP_CONNECTOR_MODE` chooses how the operation runs each call:
+
+- `activity` (default): the operation is backed by a **standalone activity**, not a workflow: it
+  calls `temporalnexus.StartActivity` to start `Request`, and the server completes the Nexus
+  operation through a completion callback when the activity finishes. The activity's retry policy
+  (the Outbound Connector's) does all retrying, and the caller gets the last real error.
+- `sync`: a **synchronous Nexus operation** (`nexus.NewSyncOperation`), with no activity. It makes
+  one attempt within the Nexus request (about 10 seconds; it gives up 1s before the deadline) and
+  replies. The **caller's** Temporal server retries retryable failures with its own backoff, and a
+  caller whose retries never succeed gets a `TimeoutError`, not the Outbound Connector's error.
+  Cheaper: one Nexus operation, no activity actions.
+
+Use sync for fast (well under 10 seconds), idempotent calls where a timeout error on persistent
+failure is acceptable; activity for slow endpoints, strict rate-limit handling, or when callers need
+the real error. docs/errors.md#activity-or-sync-mode compares them.
 
 ## Requirements
 
 - Go 1.26 or later, and Go SDK v1.50 or later (`temporalnexus.StartActivity`).
 - Temporal Server 1.32 or later (Temporal CLI 1.9.1 or later for a local dev server), or Temporal
-  Cloud. The Outbound Connector's namespace needs **standalone activities with completion callbacks**:
+  Cloud. In activity mode (the default), the Outbound Connector's namespace needs **standalone
+  activities with completion callbacks** (sync mode doesn't):
   - Dev server: `--dynamic-config-value activity.enableCallbacks=true`.
   - Without it, every call fails with `handler error (BAD_REQUEST)` and the Outbound Connector logs
     `completion callbacks are not enabled for this namespace`.
@@ -103,11 +116,12 @@ copies of it in one namespace share the same work.
 
    | Variable | Value |
    |---|---|
+   | `HTTP_CONNECTOR_MODE` | Optional. `activity` (default) or `sync`, any case; see What this is. Any other value makes the Outbound Connector exit at startup. |
    | `HTTP_CONNECTOR_SECRET_*` | API keys callers can name in `apiKeyEnvVar`, or as any header's whole value. |
    | `HTTP_CONNECTOR_SECRET_*_DOMAINS` | **Required for each secret.** Where it may be sent: a list like `HTTP_CONNECTOR_ALLOWED_DOMAINS` (domains with their subdomains, exact IPv4 addresses, or `DISABLE ALLOWLIST` for any allowed host). A secret without one, or one whose secret is unset or empty, makes the Outbound Connector exit at startup. A `_DOMAINS` variable is never a secret. |
    | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` | Optional. Whole minutes ≥ 1, default 5. Any other value makes the Outbound Connector exit at startup. |
-   | `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` | Optional. Whole seconds ≥ 10, default 60. One attempt's `StartToCloseTimeout`; each HTTP request times out 5s sooner. A caller's Nexus timeout must be at least this + 10s. Any other value makes the Outbound Connector exit at startup. |
-   | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Any other value makes the Outbound Connector exit at startup. |
+   | `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` | Optional. Whole seconds ≥ 10, default 60. One attempt's `StartToCloseTimeout`; each HTTP request times out 5s sooner. A caller's Nexus timeout must be at least this + 10s. In sync mode it only caps each request. Any other value makes the Outbound Connector exit at startup. |
+   | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` | Optional. Whole minutes ≥ 1, default 1500 (25h). The longest a call retries, when the caller's timeout is longer or unset. Not used in sync mode. Any other value makes the Outbound Connector exit at startup. |
    | `HTTP_CONNECTOR_ALLOW_REDIRECTS` | Optional. `true` or `false` (anything `strconv.ParseBool` takes), default `false`: no redirect is followed, even on the same host. Any other value makes the Outbound Connector exit at startup. |
    | `HTTP_CONNECTOR_ALLOWED_DOMAINS` | **Required.** Comma-separated domains, e.g. `temporal.io, api.stripe.com`; spaces ignored. Each allows itself and its subdomains. `DISABLE ALLOWLIST` (`DisableAllowlist`, any case) as the whole value allows any host. Unset or empty, or an entry that isn't a bare domain of at least two labels (scheme, port, path, `*`, empty, a single label such as `com` or `localhost`, or a partial IPv4 address such as `10.0`), makes the Outbound Connector exit at startup. An IPv4 entry matches only that address. |
    | `TEMPORAL_*` | As above. Every one `envconfig` reads is in `settings.Temporal`'s section. |
@@ -124,7 +138,7 @@ c := workflow.NewNexusClient("http-endpoint", httpapi.HTTPService.ServiceName)
 req := httpapi.RequestInput{URL: "https://api.example.com/items"}
 var resp httpapi.RequestOutput
 err := c.ExecuteOperation(ctx, httpapi.HTTPService.Request, req, workflow.NexusOperationOptions{
-    ScheduleToCloseTimeout: time.Hour, // the Outbound Connector retries until 10s before this
+    ScheduleToCloseTimeout: time.Hour, // activity mode: the Outbound Connector retries until 10s before this
 }).Get(ctx, &resp)
 ```
 
@@ -167,7 +181,7 @@ and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`,
 
 ## Rules that break things when ignored
 
-- **The caller's Nexus timeout sets how long the Outbound Connector retries**: until
+- **The caller's Nexus timeout sets how long the Outbound Connector retries** (activity mode): until
   `deadline.CallbackMargin` (10s) before it, then the caller gets the Outbound Connector's last
   error, not a timeout. The Outbound Connector reads it from the `operation-timeout` header, which
   the caller's server sets to the smaller of the operation's remaining `ScheduleToCloseTimeout` and
@@ -175,6 +189,16 @@ and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`,
   means the maximum. A timeout under one attempt (`HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS`, 60s by
   default) + 10s fails at once with `InvalidRequest`. Cancelling the caller's workflow cancels the
   activity.
+- **In sync mode, a call must finish within one Nexus request** (10s by default, set by the
+  caller's server: `component.nexusoperations.request.timeout`). A slower endpoint fails every
+  attempt with `Transient` `no response before the Nexus request's deadline`, the caller's server
+  retries until the caller's timeout, and the caller gets only `operation timed out (type:
+  ScheduleToClose)`; the reason is on the caller workflow's pending Nexus operation (`temporal
+  workflow describe`). Use activity mode for slow endpoints, strict rate-limit waits, or callers that
+  need the real error. In sync mode the caller's server retries on its own backoff (1s initial,
+  exponential, up to 1h; `component.nexusoperations.retryPolicy.*`), not after the rate-limit
+  window: the cache refuses those retries unsent until it ends. `HTTP_CONNECTOR_MAX_DURATION_MINUTES`
+  and the too-short-timeout check don't apply, so the caller's timeout is the only limit.
 - **Never put a secret in the request.** Name a `HTTP_CONNECTOR_SECRET_*` variable in
   `apiKeyEnvVar`, or as any header's whole value, such as `Authorization` or `X-Api-Key` (the
   variable then holds the whole header value, scheme included, e.g. `Bearer ...` or
@@ -183,7 +207,8 @@ and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`,
   `_DOMAINS` list: a request that would send it to a host not on that list fails with
   `InvalidRequest`, unsent, so one API's key can't be sent to another allowed host.
 - **A caller with no Nexus timeout retries a failing endpoint for 25 hours** (the default
-  maximum). Give the operation a short timeout when trying things out.
+  maximum) in activity mode, and with no limit from the Outbound Connector in sync mode. Give the
+  operation a short timeout when trying things out.
 - **The rate-limit cache is per Outbound Connector process and in memory.** A 429 holds back every request with the
   same key (URL plus username, else key variable name, else `Authorization` variable name, else
   `anon`) for the window, or the 429's `Retry-After` if shorter, without sending them. Restarting the Outbound Connector clears it; several Outbound Connector
@@ -198,9 +223,12 @@ and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`,
 ## Check it is working
 
 - The Outbound Connector logs a startup report, then `Starting worker on namespace "connectors",
-  task queue "nexus-connector-http"`. The report lists the settings (defaults marked), the
-  Temporal namespace, address and `payload codec` (`none: ...` unless `TEMPORAL_CODEC_ENDPOINT` is
-  set; see Encryption), then what it will do: serve the task queue, the allowlist (`Only calls to
+  task queue "nexus-connector-http"`. The report lists the settings (defaults marked;
+  `HTTP_CONNECTOR_MODE` first under Requests), the Temporal namespace, address and `payload codec`
+  (`none: ...` unless `TEMPORAL_CODEC_ENDPOINT` is set; see Encryption), then what it will do: serve
+  the task queue, how each call runs (`Run each call as a standalone activity
+  (HTTP_CONNECTOR_MODE=activity), ...` or `Run each call within its Nexus request, with no activity
+  (HTTP_CONNECTOR_MODE=sync): ...`), the allowlist (`Only calls to
   these domains are allowed (HTTP_CONNECTOR_ALLOWED_DOMAINS): ...`, or `Calls to any domain are
   allowed: the allowlist is disabled ...`), then one line per secret (`Secret
   HTTP_CONNECTOR_SECRET_STRIPE may be sent to: api.stripe.com`, or `any allowed domain` / `any
@@ -217,8 +245,8 @@ and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`,
   ```
 
   Flags: `-url`, `-method`, `-body`, `-timeout` (the Nexus operation's timeout; none by default).
-- A request being retried is a standalone activity in the Outbound Connector's namespace, with ID
-  `http-<Nexus request ID>`:
+- In activity mode, a request being retried is a standalone activity in the Outbound Connector's
+  namespace, with ID `http-<Nexus request ID>`:
 
   ```bash
   temporal activity list --namespace connectors
@@ -227,20 +255,30 @@ and isn't encrypted, and the demo (`DEMO_ENCRYPTION_KEY`,
 
   `describe` shows the attempt, the last failure with its type and HTTP response, and the next
   attempt time.
+- In sync mode there is no activity. A request being retried is a pending Nexus operation on the
+  caller's workflow: `temporal workflow describe --namespace <caller's> --workflow-id <id>` shows
+  its attempt count and last attempt failure.
 - A caller that never progresses usually means no worker is polling the caller's own task queue,
   or the endpoint doesn't exist (dev server restarted).
 
 ## Errors
 
 Every failure is an `ApplicationError` whose `Type` is an `httpconnector.ErrorType*` constant;
-callers find it with `errors.As`. For an HTTP response, `Details` holds the `RequestOutput`.
+callers find it with `errors.As`, in both modes. For an HTTP response, `Details` holds the
+`RequestOutput`. The table's Retried column is activity mode.
 
-| Type | Cause | Retried |
+| Type | Cause | Retried (activity mode) |
 |---|---|---|
 | `InvalidRequest` | Can't be made: bad URL, a caller timeout under one attempt + 10s, a host not in the allowed domains, a secret whose `_DOMAINS` list doesn't hold the host, invalid header name or value, two header names differing only in case, bad or missing key variable. Caught at start: `BAD_REQUEST` handler error with this as its cause, no activity. | No |
 | `ClientError` | A status resending won't change: 4xx not listed below, 501, 505, 511, an unfollowed 3xx (including https → http), any other non-2xx; a redirect to a host not in the allowed domains (message `redirected to "<host>", which is not on the Outbound Connector's list of allowed domains`, details the 3xx with its `Location`); a body over 2 MiB; or a TLS certificate that doesn't verify. | No |
 | `Transient` | 408, 409, 420, 421, 423, 424, 425, other 5xx, network errors, timeouts. | Backoff 5s×3 up to 5m (5s, 15s, 45s, 2m15s, 5m, …) |
 | `RateLimited` | 429, or the key is in the rate-limit cache. | After the window, or a shorter `Retry-After` |
+
+In sync mode, `HandlerError` wraps each in a Nexus handler error, with the `ApplicationError` as
+its cause: `InvalidRequest` → `BAD_REQUEST` (not sent, not retried); any other non-retryable
+(`ClientError`) → non-retryable `INTERNAL` with the message (e.g. `... returned status 404`);
+`RateLimited` → retryable `RESOURCE_EXHAUSTED`; `Transient` → retryable `UNAVAILABLE`. The caller's
+server retries the retryable ones; if they never succeed the caller gets a `TimeoutError`.
 
 A request that breaks the contract (unknown field, unlisted method, no `url`) fails before the
 operation runs: a `PayloadValidationError` when a Go caller encodes it, or a `BAD_REQUEST`
@@ -283,19 +321,23 @@ go test -short ./...                                           # skip the end-to
   read-only. Secrets a request names are read through `lookupSecret` (only variables starting
   with `SecretEnvPrefix`) from `HTTPActivities.env`.
 - Outside the package, `cmd/outbound` and `testcaller` use only `TaskQueue`, `Config`, `New`,
-  `Register`, `HTTPActivities.Report`, the `ErrorType*` constants and `AllowedDomainsEnvVar`;
+  `Register`, `HTTPActivities.Report`, the `ErrorType*` constants, `AllowedDomainsEnvVar` and
+  (the end-to-end test) `ModeEnvVar`;
   `configui` uses `Config`, `New`, `HTTPActivities` (`Describe`, `CheckSecretsAllowed`,
   `Request`) and `SecretEnvPrefix`; `setup` uses the `*EnvVar` constants, `ParseDomains`,
-  `ReadSecretDomains`, `DefaultAttemptTimeout` and `MinAttemptTimeout`. Each of them builds the
+  `ReadSecretDomains`, `DefaultAttemptTimeout`, `MinAttemptTimeout`, `ModeActivity`, `ModeSync` and
+  `ParseMode`. Each of them builds the
   activities the same way: `setup.Outbound.Load(env)`, then `httpconnector.New(setup.Config(vals), env)`.
-  `ApplyStatus`,
+  `ApplyStatus`, `Send`, `RequestSync`, `HandlerError`, `Mode`, `HTTPActivities.Mode()`,
   `Validate`, `CheckDomain`, `ScheduleToClose`, `MaxDuration`, `ActivityOptions`, `RateLimitKey`,
   `InvalidRequestError`, `SecretEnvPrefix`, `SecretDomainsSuffix`, `CheckSecretDomains`, `RateLimitMinutesEnvVar`, `MaxDurationEnvVar`, `AttemptTimeoutEnvVar`, `AllowRedirectsEnvVar` and `DisableAllowlist` are
   exported on purpose, though only the package uses them: they are
   the Outbound Connector's API for code that registers or calls it differently (such as
   nexus-connector-openapi). Don't unexport them.
-- `Register(w, a)` uses the one `HTTPActivities` it is given for both the service and the activity
-  registration, so one rate-limit cache is shared; `cmd/outbound` logs `Report` from that same
+- `Register(w, a)` registers by `a.Mode()`: in activity mode the Nexus service and the `Request`
+  activity, in sync mode only the Nexus service (a `nexus.NewSyncOperation` calling `RequestSync`).
+  It uses the one `HTTPActivities` it is given for everything it registers, so one rate-limit cache
+  is shared; `cmd/outbound` logs `Report` from that same
   instance. Keep that.
 - A secret value must never enter the request, history, the rate-limit key, error messages, or
   logs. Any new place a response or error text reaches the caller goes through `redact` or
@@ -314,14 +356,20 @@ request through the code.
 
 - `http.nexusrpc.yaml` — the contract; `generated/httpapi` is generated from it.
 - `httpconnector/` — nearly all logic.
-  - `http.go`: `TaskQueue`; `Config` and `New(cfg, env)`; `Register(w, a)`, which builds the Nexus
-    operation inline; the `Request`
-    activity; `ApplyStatus`, which turns a response's status into the result (clears or marks the
+  - `http.go`: `TaskQueue`; `Config` (including `Mode`) and `New(cfg, env)`; `Register(w, a)`, which
+    builds the Nexus operation inline for `a.Mode()`; `Send`, one HTTP attempt that needs no
+    Temporal context (its logger is the activity's or the Nexus operation's, else slog's default);
+    the `Request` activity, which is just `Send`; `ApplyStatus`, which turns a response's status into the result (clears or marks the
     rate-limit key, builds the typed error) and which a library caller also calls to remap a 2xx
-    whose body says otherwise, so keep every status decision in it; `categorizeError()` (status →
-    error type).
+    whose body says otherwise, in any context, so keep every status decision in it;
+    `categorizeError()` (status → error type).
+  - `sync.go`: `ModeEnvVar`, `Mode`, `ModeActivity`, `ModeSync`, `ParseMode`; `RequestSync(ctx,
+    req)`, the sync operation's body: `Send` with a context ending `replyMargin` (1s) before the
+    Nexus request's deadline, turning a miss into a retryable `Transient` that says to use activity
+    mode; and `HandlerError(err)`, which maps `Send`'s errors to Nexus handler errors (see Errors).
+    Both exported for library users such as nexus-connector-openapi.
   - `redact.go`: `redact` and `redactResponse`.
-  - The operation validates first (`build` with `a.env`, as `Validate` does, then `CheckDomain`, then `ScheduleToClose` from
+  - In activity mode, the operation validates first (`build` with `a.env`, as `Validate` does, then `CheckDomain`, then `ScheduleToClose` from
     the `operation-timeout` header) and returns a `BadRequest` handler error (cause: an
     `InvalidRequest` ApplicationError) without starting an activity. Otherwise it starts
     `Request` with `ActivityOptions(id, total)`. Activity ID is `"http-" + Nexus request ID`, so a
@@ -338,11 +386,12 @@ request through the code.
     `Validate`, `apiKey`, `RateLimitKey`, `secrets(req)`.
   - `errors.go`: the `ErrorType*` constants. `transientError` leaves the delay to the retry
     policy; `rateLimitedError` sets `NextRetryDelay` to the rest of the window, or a 429's shorter
-    `Retry-After`. There is no loop in the activity.
+    `Retry-After` (ignored in sync mode, where the caller's server picks the delay). There is no
+    loop in the activity or `RequestSync`.
   - `allowlist.go`: `AllowedDomainsEnvVar`, given to `New` as `Config.AllowedDomains` into `HTTPActivities.domains` (required; nil,
     from `DisableAllowlist`, = any host); `ParseDomains`, which checks a list for the variable and
     each secret's `_DOMAINS`; `CheckDomain`, a method because the list lives on `HTTPActivities`, called by the
-    operation and again by `Request` before sending. Matches the lower-cased host without port
+    activity-mode operation and again by `Send` before sending. Matches the lower-cased host without port
     or trailing dot, exactly or as a subdomain at a dot boundary; an IP address, as entry or host,
     only exactly.
   - `timeout.go`: `MaxDurationEnvVar` (default 25h in `setup`, given to `New` as
@@ -355,7 +404,7 @@ request through the code.
     `AttemptTimeoutEnvVar`. The server rewrites the header at dispatch, so
     queue time is already subtracted.
   - `ratelimiter.go`: the `limiter`, owned by `HTTPActivities`. A 429 marks the key; while marked,
-    `Request` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
+    `Send` fails with `RateLimited` without sending; a 2xx clears it; `mark` evicts expired
     entries. It takes an explicit `now`. `retryAfter` reads a 429's `Retry-After` (seconds or an
     HTTP date) and returns it if shorter than the window, else the window; `mark` holds the key
     that long. The window is `Config.RateLimitWindow`, read by `setup` with `settings.Minutes`
@@ -365,7 +414,7 @@ request through the code.
   into `HTTPActivities.secretDomains` (secret variable → domains, nil = any allowed host; a
   variable not in it is sent nowhere), which reports every secret without a list and every list
   without a secret, naming variables only; `CheckSecretDomains`, called by the operation after
-  `CheckDomain` and again by `Request`, which matches the host as `CheckDomain` does; and
+  `CheckDomain` and again by `Send`, which matches the host as `CheckDomain` does; and
   `requestSecretVars`; `CheckSecretsAllowed`, for the setup page, which reports a secret's domain
   outside the allowlist. `secretEnv` refuses a `_DOMAINS` variable as a secret. Redirects need no
   check of their own: secrets reach only the original host and its subdomains (see `redirect.go`),
@@ -379,7 +428,7 @@ request through the code.
     `http.ErrUseLastResponse` for every redirect, so the 3xx becomes a `ClientError` with its
     response. On, it is Go's default policy (10 redirects, re-enforced since setting `CheckRedirect`
     drops it) except that it doesn't follow https → http (`http.ErrUseLastResponse`); refuses a hop
-    to a host `allowedHost` rejects with a `redirectNotAllowedError`, which `Request` turns into
+    to a host `allowedHost` rejects with a `redirectNotAllowedError`, which `Send` turns into
     a non-retryable `ClientError` naming the host, with the 3xx's status and headers in its details;
     deletes `Referer` (Go sets it to the previous URL, query key included); and, once `leftSite`
     (any hop not the original host or a subdomain of it, sticky as in Go), deletes every header from
@@ -390,10 +439,11 @@ request through the code.
   (2 MiB) is a `ClientError` without its response, whatever the status.
 - `describe.go`: `Describe`, the allowlist and secret lines (also the setup page's), and `Report`,
   the startup report (`report.Format`: the settings with `report.Env` marking defaults,
-  `temporalclient.Section`, then the task queue and `Describe`'s lines).
+  `temporalclient.Section`, then the task queue, `modeLine` (how each call runs), and `Describe`'s
+  lines).
 - `setup/` — `settings.go`: `Outbound`, every variable the Outbound Connector reads, in sections,
   with the shared parse functions (`settings.Bool`, `settings.Minutes`, `settings.Required`) and the
-  variable-specific ones (`parseAllowedDomains`, `parseAttemptTimeout`), `secretsFamily`
+  variable-specific ones (`parseAllowedDomains`, `parseAttemptTimeout`, `httpconnector.ParseMode`), `secretsFamily`
   (`HTTP_CONNECTOR_SECRET_<NAME>` with `<NAME>_DOMAINS`, checked by
   `httpconnector.ReadSecretDomains`), the Temporal and Network sections, and `Config(vals)`, which
   turns `Outbound.Load`'s values into an `httpconnector.Config`. `Load` reports every problem at
@@ -437,7 +487,8 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
 
 - `httpconnector/` — `Request` in the SDK's activity test environment against `httptest`
   servers (helpers `runRequest`, `appErr`, `countingServer`), plus `Validate` and
-  `categorizeError`. The limiter takes an explicit `now` (`ratelimiter_test.go`). Tests use
+  `categorizeError`. `sync_test.go`: `Send` with no activity context, `HandlerError`'s mapping,
+  `RequestSync` stopping before the request's deadline, and `ParseMode`. The limiter takes an explicit `now` (`ratelimiter_test.go`). Tests use
   `newWithWindow(testWindow)` (in `http_test.go`, which calls `New` with a `Config`) rather than
   the environment variables; it allows no secret anywhere,
   so tests that send secrets but aren't about their domains wrap it in `anySecretHost`.
@@ -463,4 +514,8 @@ See [docs/testing.md](docs/testing.md) for how to run the test workflow and the 
   gives the Outbound Connector's client `temporalclient.Options` with `codectest.Server` (an
   `httptest` server for the demo codec) and the caller `codectest.WithDemoCodec`, then checks with
   `codectest.RequireEncrypted` that the Nexus
-  operation's and the activity's input and result are stored encrypted.
+  operation's and the activity's input and result are stored encrypted. `TestEndToEnd_Sync` runs
+  the Outbound Connector with `HTTP_CONNECTOR_MODE=sync`: success with no activity (no started
+  event, none in `ListActivities`), a 503 retried by the caller's server, a 404 `ClientError` with
+  its response not retried, an `InvalidRequest` as `BAD_REQUEST`, and an endpoint too slow for one
+  request retried until the caller's `TimeoutError`, with the reason on the pending operation.

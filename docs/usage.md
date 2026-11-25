@@ -34,6 +34,8 @@ err := c.ExecuteOperation(ctx, httpapi.HTTPService.Request, req, workflow.NexusO
 // On failure: see docs/errors.md.
 ```
 
+Always give the operation a timeout. The comment above is for the default activity mode. If the Outbound Connector runs with `HTTP_CONNECTOR_MODE=sync`, your Temporal server retries a failing call until this timeout instead, and if no retry succeeds the error is a `TimeoutError` rather than the endpoint's last error. The caller's code is the same in both modes. See [Errors — activity or sync mode](errors.md#activity-or-sync-mode).
+
 This sends `POST https://api.example.com/items?source=workflow` with the JSON body and basic auth: user `reporting-bot`, password the value of `HTTP_CONNECTOR_SECRET_ITEMS` read from the Outbound Connector's environment.
 
 ## Call from another language
@@ -70,7 +72,7 @@ curl --include \
 temporal activity result --namespace connectors --activity-id http-my-request-1
 ```
 
-The response is `201 Created` with an operation token. The activity ID is `http-` plus the request ID you send.
+In activity mode (the default), the response is `201 Created` with an operation token, and `temporal activity result` waits for the result. The activity ID is `http-` plus the request ID you send. In sync mode, the response is the result itself, and there is no activity to ask for it.
 
 ## Options
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/temporalio/nexus-connector-http/generated/httpapi"
 	"github.com/temporalio/nexus-connector-http/httpconnector"
@@ -227,6 +228,138 @@ func TestEndToEnd(t *testing.T) {
 		require.ErrorAs(t, err, &appErr)
 		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
 		require.Contains(t, appErr.Message(), `domain "example.com" is not on the Outbound Connector's list of allowed domains`)
+	})
+}
+
+// TestEndToEnd_Sync runs the Outbound Connector with HTTP_CONNECTOR_MODE=sync: each call runs within
+// its Nexus request, with no activity, and the caller's server retries failures. Callers see the
+// same error types and details as in activity mode.
+func TestEndToEnd_Sync(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	server := startDevServer(ctx, t)
+
+	t.Setenv(httpconnector.ModeEnvVar, "sync")
+	t.Setenv(httpconnector.AllowedDomainsEnvVar, "127.0.0.1")
+	connectorWorker := worker.New(server.Client(), httpconnector.TaskQueue, worker.Options{})
+	registerConnector(t, connectorWorker)
+	require.NoError(t, connectorWorker.Start())
+	t.Cleanup(connectorWorker.Stop)
+
+	callerClient, err := client.Dial(client.Options{HostPort: server.FrontendHostPort(), Namespace: testcaller.Namespace})
+	require.NoError(t, err)
+	t.Cleanup(callerClient.Close)
+	callerWorker := worker.New(callerClient, testcaller.TaskQueue, worker.Options{})
+	callerWorker.RegisterWorkflow(testcaller.CallerWorkflow)
+	require.NoError(t, callerWorker.Start())
+	t.Cleanup(callerWorker.Stop)
+
+	start := func(t *testing.T, req httpapi.RequestInput, timeout time.Duration) client.WorkflowRun {
+		t.Helper()
+		run, err := callerClient.ExecuteWorkflow(ctx, client.StartWorkflowOptions{TaskQueue: testcaller.TaskQueue}, testcaller.CallerWorkflow, req, timeout)
+		require.NoError(t, err)
+		return run
+	}
+	call := func(t *testing.T, req httpapi.RequestInput) (httpapi.RequestOutput, error) {
+		t.Helper()
+		var resp httpapi.RequestOutput
+		err := start(t, req, time.Minute).Get(ctx, &resp)
+		return resp, err
+	}
+
+	t.Run("success, with no activity behind the operation", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, "echo "+r.URL.Query().Get("q"))
+		}))
+		defer srv.Close()
+		run := start(t, httpapi.RequestInput{URL: srv.URL,
+			QueryParams: &httpapi.RequestInputQueryParams{AdditionalProperties: map[string]string{"q": "one"}}}, time.Minute)
+		var resp httpapi.RequestOutput
+		require.NoError(t, run.Get(ctx, &resp))
+		require.Equal(t, "echo one", resp.Body)
+
+		// A synchronous operation completes without a started event: there was no activity to
+		// start, and none exists in the Outbound Connector's namespace.
+		history := callerClient.GetWorkflowHistory(ctx, run.GetID(), run.GetRunID(), false, 0)
+		var completed bool
+		for history.HasNext() {
+			event, err := history.Next()
+			require.NoError(t, err)
+			require.Nil(t, event.GetNexusOperationStartedEventAttributes(), "a synchronous operation is never started asynchronously")
+			completed = completed || event.GetNexusOperationCompletedEventAttributes() != nil
+		}
+		require.True(t, completed)
+		activities, err := server.Client().ListActivities(ctx, client.ListActivitiesOptions{})
+		require.NoError(t, err)
+		for a, err := range activities.Results {
+			require.NoError(t, err)
+			require.Fail(t, "no activity expected", "found %s", a.ActivityID)
+		}
+	})
+
+	t.Run("transient failure is retried by the caller's server", func(t *testing.T) {
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if hits.Add(1) == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			_, _ = io.WriteString(w, "second time")
+		}))
+		defer srv.Close()
+		resp, err := call(t, httpapi.RequestInput{URL: srv.URL})
+		require.NoError(t, err)
+		require.Equal(t, "second time", resp.Body)
+		require.Equal(t, int32(2), hits.Load())
+	})
+
+	t.Run("client error reaches the caller with the response, not retried", func(t *testing.T) {
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits.Add(1)
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, "no such thing")
+		}))
+		defer srv.Close()
+		_, err := call(t, httpapi.RequestInput{URL: srv.URL})
+		var appErr *temporal.ApplicationError
+		require.ErrorAs(t, err, &appErr)
+		require.Equal(t, httpconnector.ErrorTypeClientError, appErr.Type())
+		var resp httpapi.RequestOutput
+		require.NoError(t, appErr.Details(&resp))
+		require.Equal(t, int64(404), resp.StatusCode)
+		require.Equal(t, "no such thing", resp.Body)
+		require.Contains(t, err.Error(), "returned status 404", "the caller's error names the status")
+		require.Equal(t, int32(1), hits.Load(), "a client error must not be retried")
+	})
+
+	t.Run("invalid request is a bad request, not sent", func(t *testing.T) {
+		_, err := call(t, httpapi.RequestInput{URL: "https://example.com/file"})
+		var handlerErr *nexus.HandlerError
+		require.ErrorAs(t, err, &handlerErr)
+		require.Equal(t, nexus.HandlerErrorTypeBadRequest, handlerErr.Type)
+		var appErr *temporal.ApplicationError
+		require.ErrorAs(t, err, &appErr)
+		require.Equal(t, httpconnector.ErrorTypeInvalidRequest, appErr.Type())
+		require.Contains(t, appErr.Message(), `domain "example.com" is not on the Outbound Connector's list of allowed domains`)
+	})
+
+	t.Run("an endpoint too slow for one request: retried until the caller times out, the reason on the pending operation", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}))
+		defer srv.Close()
+		run := start(t, httpapi.RequestInput{URL: srv.URL}, 25*time.Second)
+		require.EventuallyWithT(t, func(c *assert.CollectT) {
+			desc, err := callerClient.DescribeWorkflow(ctx, run.GetID(), run.GetRunID())
+			require.NoError(c, err)
+			ops := desc.RawResponse.GetPendingNexusOperations()
+			require.Len(c, ops, 1)
+			require.Contains(c, ops[0].GetLastAttemptFailure().GetMessage(), "no response before the Nexus request's deadline")
+		}, 20*time.Second, 200*time.Millisecond)
+		err := run.Get(ctx, nil)
+		var timeoutErr *temporal.TimeoutError
+		require.ErrorAs(t, err, &timeoutErr, err.Error())
 	})
 }
 

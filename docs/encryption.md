@@ -89,7 +89,7 @@ codec server's encoding runs first, then the compiled-in codecs.
 
 | | Encrypted | Not encrypted |
 |---|---|---|
-| **Outbound Connector** | Each `request`'s input (the URL, method, headers, query parameters, body and username) and its result (the response's status, headers and body), and the same as the `Request` activity's input and result. Errors it returns: their details (on a non-2xx response, the response's status, headers and body), messages (which name the URL) and stack traces. | Each error's type. The activity ID (`http-<Nexus request ID>`: no request content). The endpoint, service and operation names. |
+| **Outbound Connector** | Each `request`'s input (the URL, method, headers, query parameters, body and username) and its result (the response's status, headers and body), and, in activity mode, the same as the `Request` activity's input and result. Errors it returns: their details (on a non-2xx response, the response's status, headers and body), messages (which name the URL) and stack traces. | Each error's type. In activity mode, the activity ID (`http-<Nexus request ID>`: no request content). The endpoint, service and operation names. |
 | **The HTTP API** | | Requests and responses: the Outbound Connector sends what the caller passed, decrypted, and reads the response as the API sends it. Use `https` URLs to keep them encrypted on the network. |
 
 **Errors are encrypted too.** With a codec set, the Outbound Connector uses a failure converter that

@@ -19,7 +19,7 @@ temporal server start-dev \
   --namespace http-testcaller
 ```
 
-This creates two namespaces: `connectors` for the Outbound Connector and `http-testcaller` for the test workflow. `activity.enableCallbacks` lets a standalone activity complete a Nexus operation. Without it every call fails with `handler error (BAD_REQUEST)` and the Outbound Connector logs `completion callbacks are not enabled for this namespace`.
+This creates two namespaces: `connectors` for the Outbound Connector and `http-testcaller` for the test workflow. `activity.enableCallbacks` lets a standalone activity complete a Nexus operation, which the Outbound Connector needs in its default activity mode. Without it every call fails with `handler error (BAD_REQUEST)` and the Outbound Connector logs `completion callbacks are not enabled for this namespace`. With `HTTP_CONNECTOR_MODE=sync` (see [Errors — activity or sync mode](errors.md#activity-or-sync-mode)) the Outbound Connector uses no activity and doesn't need it.
 
 Add `--http-port 7243` if you want to call the endpoint directly over HTTP (see [Usage — call over HTTP](usage.md#call-over-http)).
 
@@ -56,6 +56,7 @@ Outbound Connector configuration (values marked "default" come from variables th
   Allowed hosts
     HTTP_CONNECTOR_ALLOWED_DOMAINS          api.weatherapi.com, httpbin.org
   Requests
+    HTTP_CONNECTOR_MODE                     activity (default)
     HTTP_CONNECTOR_ALLOW_REDIRECTS          false (default)
     HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS  1m (default)
     HTTP_CONNECTOR_RATE_LIMIT_MINUTES       5m (default)
@@ -66,12 +67,15 @@ Outbound Connector configuration (values marked "default" come from variables th
     payload codec                           none: payloads go to Temporal as they are, unencrypted (set TEMPORAL_CODEC_ENDPOINT to encrypt them)
 What the Outbound Connector will do:
   - Serve the HTTPService Nexus service, with the operation request, and run requests on the task queue "nexus-connector-http": point the Outbound Connector's Nexus endpoint at it.
+  - Run each call as a standalone activity (HTTP_CONNECTOR_MODE=activity), retried with this connector's policy until 10 seconds before the caller's Nexus operation times out, or HTTP_CONNECTOR_MAX_DURATION_MINUTES.
   - Only calls to these domains are allowed (HTTP_CONNECTOR_ALLOWED_DOMAINS): api.weatherapi.com, httpbin.org
   - Secret HTTP_CONNECTOR_SECRET_WEATHER may be sent to: api.weatherapi.com
 Starting worker on namespace "connectors", task queue "nexus-connector-http"
 ```
 
-With the allowlist disabled, the allowlist line is `Calls to any domain are allowed: the allowlist is
+With `HTTP_CONNECTOR_MODE=sync`, the second line is `Run each call within its Nexus request, with no
+activity (HTTP_CONNECTOR_MODE=sync): one attempt per request, which must finish within it (about 10
+seconds). ...`. With the allowlist disabled, the allowlist line is `Calls to any domain are allowed: the allowlist is
 disabled (HTTP_CONNECTOR_ALLOWED_DOMAINS is "DISABLE ALLOWLIST")`. A secret whose list is `DISABLE
 ALLOWLIST` may be sent to `any allowed domain`, or to `any host` when the allowlist is disabled too.
 With no secrets, the last line is `Secrets: none`. Only names and domains are logged, never a
@@ -112,8 +116,9 @@ Secrets, such as API keys, that requests name rather than carry, each with the h
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
+| `HTTP_CONNECTOR_MODE` |  | activity | How each call runs. `activity`: as a standalone activity, with this connector's retry policy, rate-limit waits, attempts of up to `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS`, and the last real error reaching the caller before its timeout. `sync`: within the Nexus request, with no activity, which costs less, but each attempt must finish within the request (about 10 seconds), the caller's Temporal server retries failures with its own backoff, and a caller whose retries never succeed gets only a timeout. `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` then only caps each request, and `HTTP_CONNECTOR_MAX_DURATION_MINUTES` doesn't apply. Any case. See [Errors — activity or sync mode](errors.md#activity-or-sync-mode). |
 | `HTTP_CONNECTOR_ALLOW_REDIRECTS` |  | false | `true` to follow redirects, up to 10, except from https to http and to a host not in `HTTP_CONNECTOR_ALLOWED_DOMAINS`; headers filled from a secret are dropped once a redirect leaves the original host. `false` follows none, even on the same host: the 3xx fails as a `ClientError` with its response. Takes any value Go's `strconv.ParseBool` does. See [Usage — redirects](usage.md#redirects). |
-| `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` |  | 60 | How long one attempt may take, in whole seconds, at least 10. Each HTTP request times out 5 seconds sooner, so it fails with the Outbound Connector's own `Transient` error before the attempt times out. A caller's Nexus operation needs at least this plus 10 seconds. |
+| `HTTP_CONNECTOR_ATTEMPT_TIMEOUT_SECONDS` |  | 60 | How long one attempt may take, in whole seconds, at least 10. Each HTTP request times out 5 seconds sooner, so it fails with the Outbound Connector's own `Transient` error before the attempt times out. In activity mode, a caller's Nexus operation needs at least this plus 10 seconds; in sync mode it only caps each request. |
 | `HTTP_CONNECTOR_RATE_LIMIT_MINUTES` |  | 5 | How long a rate-limit key (the URL plus who is calling) is held back after a 429 response, in whole minutes, at least 1. Until then, requests with that key fail as `RateLimited` without being sent. A `Retry-After` header on the 429 that asks for less time is used instead. |
 | `HTTP_CONNECTOR_MAX_DURATION_MINUTES` |  | 1500 (25 hours) | The longest a call keeps retrying, in whole minutes, at least 1, when the caller's Nexus operation has a longer timeout or none. |
 
@@ -180,4 +185,4 @@ All Nexus connectors default to the same `connectors` namespace and are kept apa
 
 Every variable `envconfig` reads is in [Temporal](#temporal) above. A variable that is set overrides the profile file's value. Behind a proxy, the connection to Temporal uses `HTTPS_PROXY` and `NO_PROXY` (see [Network](#network)).
 
-The Outbound Connector's namespace requires standalone activities with completion callbacks (`activity.enableCallbacks`). On a self-hosted server, set that dynamic config value. On Temporal Cloud, confirm with Temporal support that it is enabled for your namespace before running the Outbound Connector.
+In activity mode (the default), the Outbound Connector's namespace requires standalone activities with completion callbacks (`activity.enableCallbacks`). On a self-hosted server, set that dynamic config value. On Temporal Cloud, confirm with Temporal support that it is enabled for your namespace before running the Outbound Connector. Sync mode (`HTTP_CONNECTOR_MODE=sync`) doesn't need it.

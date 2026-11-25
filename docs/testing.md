@@ -76,14 +76,16 @@ temporal workflow result --namespace http-testcaller --workflow-id my-request
 | `go run ./testcaller/starter -url https://httpbin.org/status/503 -timeout 10m` | Retried with backoff until 10 seconds before the 10 minutes are up, then fails with `Transient`. Without the flag it would retry for up to 25 hours. |
 | `go run ./testcaller/starter -url https://httpbin.org/status/429 -timeout 10m` | Retried after the rate-limit window (5 minutes by default), then fails with `RateLimited` once another window wouldn't fit in the 10 minutes — after about 5 minutes. |
 
-While a request is being retried you can inspect it as a standalone activity:
+These are activity mode, the default. With `HTTP_CONNECTOR_MODE=sync` on the Outbound Connector, the 503 and 429 calls are retried by the caller's Temporal server instead, and fail with a `TimeoutError` when the 10 minutes are up (see [Errors — activity or sync mode](errors.md#activity-or-sync-mode)).
+
+While a request is being retried in activity mode you can inspect it as a standalone activity:
 
 ```bash
 temporal activity list --namespace connectors
 temporal activity describe --namespace connectors --activity-id <activity ID from the list>
 ```
 
-`describe` shows the attempt number, the last failure with its error type and HTTP response, and when the next attempt is scheduled.
+`describe` shows the attempt number, the last failure with its error type and HTTP response, and when the next attempt is scheduled. In sync mode there is no activity: `temporal workflow describe --namespace http-testcaller --workflow-id <workflow ID>` shows the pending Nexus operation's attempt count and last attempt failure.
 
 ## Run it encrypted
 
@@ -101,7 +103,7 @@ go test ./httpconnector -run TestRequest_429CachesKey -v # single test
 
 The test suites are:
 
-- **`httpconnector/`** runs `Request` in the SDK's activity test environment against local `httptest` servers. It covers GET and POST responses, status classification, retry delays, timeouts, the rate-limit cache, API keys, redirects, redaction, and input validation.
+- **`httpconnector/`** runs `Request` in the SDK's activity test environment against local `httptest` servers. It covers GET and POST responses, status classification, retry delays, timeouts, the rate-limit cache, API keys, redirects, redaction, and input validation. `sync_test.go` covers sync mode: `Send` with no activity, `HandlerError`'s mapping, `RequestSync` stopping before the Nexus request's deadline, and `ParseMode`.
 - **`setup/`** checks every environment variable's parsing and defaults, and that `Config` reads only the environment it is given.
 
-- **`testcaller/e2e_test.go`** starts a dev server with the `temporal` CLI, creates both namespaces and the endpoint, runs the Outbound Connector and the test caller in-process, and makes requests across the namespaces: a successful request, a 503 retried after 5 s, retries stopping before the caller's timeout, a 404 `ClientError` with its response in the error details, a caller timeout too short for one attempt rejected at start, an invalid request, and a domain not in the allowed list. `TestEndToEnd_EncryptedRequest` runs the Outbound Connector with a codec server and the test caller with the demo codec, and checks that the Nexus operation's and the activity's input and result, and a failed request's error details, are stored encrypted. Both are skipped automatically if `temporal` is not on `PATH`, or when run with `-short`.
+- **`testcaller/e2e_test.go`** starts a dev server with the `temporal` CLI, creates both namespaces and the endpoint, runs the Outbound Connector and the test caller in-process, and makes requests across the namespaces: a successful request, a 503 retried after 5 s, retries stopping before the caller's timeout, a 404 `ClientError` with its response in the error details, a caller timeout too short for one attempt rejected at start, an invalid request, and a domain not in the allowed list. `TestEndToEnd_EncryptedRequest` runs the Outbound Connector with a codec server and the test caller with the demo codec, and checks that the Nexus operation's and the activity's input and result, and a failed request's error details, are stored encrypted. `TestEndToEnd_Sync` runs the Outbound Connector with `HTTP_CONNECTOR_MODE=sync`: a successful request with no activity behind it, a 503 retried by the caller's server, a 404 `ClientError` with its response and not retried, an invalid request as a `BAD_REQUEST`, and an endpoint too slow for one Nexus request, retried until the caller gets a `TimeoutError`, with the reason on the pending Nexus operation. All are skipped automatically if `temporal` is not on `PATH`, or when run with `-short`.

@@ -29,7 +29,7 @@ var Outbound = &settings.Program{
 		{Title: "Allowed hosts", Variables: []*settings.Variable{allowedDomainsSetting.Variable}},
 		{Title: "Secrets", Families: []*settings.Family{secretsFamily.Family}},
 		{Title: "Requests", Variables: []*settings.Variable{
-			allowRedirectsSetting.Variable, attemptTimeoutSetting.Variable, rateLimitSetting.Variable,
+			modeSetting.Variable, allowRedirectsSetting.Variable, attemptTimeoutSetting.Variable, rateLimitSetting.Variable,
 			maxDurationSetting.Variable,
 		}},
 		temporalSection,
@@ -40,6 +40,7 @@ var Outbound = &settings.Program{
 // Config is the Outbound Connector's configuration in vals, which Outbound.Load made.
 func Config(vals *settings.Values) httpconnector.Config {
 	return httpconnector.Config{
+		Mode:            modeSetting.From(vals),
 		AllowedDomains:  allowedDomainsSetting.From(vals),
 		AllowRedirects:  allowRedirectsSetting.From(vals),
 		AttemptTimeout:  attemptTimeoutSetting.From(vals),
@@ -105,6 +106,19 @@ var secretsFamily = settings.DefineFamily(settings.Family{
 	return httpconnector.ReadSecretDomains(env.Environ())
 })
 
+var modeSetting = settings.Define(settings.Variable{
+	Name:    httpconnector.ModeEnvVar,
+	Default: string(httpconnector.ModeActivity),
+	Help: "How each call runs. `" + string(httpconnector.ModeActivity) + "`: as a standalone activity, with this connector's " +
+		"retry policy, rate-limit waits, attempts of up to `" + httpconnector.AttemptTimeoutEnvVar + "`, and the last real error " +
+		"reaching the caller before its timeout. `" + string(httpconnector.ModeSync) + "`: within the Nexus request, with no " +
+		"activity, which costs less, but each attempt must finish within the request (about 10 seconds), the caller's " +
+		"Temporal server retries failures with its own backoff, and a caller whose retries never succeed gets only a " +
+		"timeout. `" + httpconnector.AttemptTimeoutEnvVar + "` then only caps each request, and `" + httpconnector.MaxDurationEnvVar +
+		"` doesn't apply. Any case.",
+	Docs: "See [Errors — activity or sync mode](errors.md#activity-or-sync-mode).",
+}, httpconnector.ParseMode)
+
 var allowRedirectsSetting = settings.Define(settings.Variable{
 	Name:    httpconnector.AllowRedirectsEnvVar,
 	Default: "false",
@@ -121,8 +135,8 @@ var attemptTimeoutSetting = settings.Define(settings.Variable{
 	Name:    httpconnector.AttemptTimeoutEnvVar,
 	Default: "60",
 	Help: "How long one attempt may take, in whole seconds, at least 10. Each HTTP request times out 5 seconds " +
-		"sooner, so it fails with the Outbound Connector's own `Transient` error before the attempt times out. A caller's " +
-		"Nexus operation needs at least this plus 10 seconds.",
+		"sooner, so it fails with the Outbound Connector's own `Transient` error before the attempt times out. In activity " +
+		"mode, a caller's Nexus operation needs at least this plus 10 seconds; in sync mode it only caps each request.",
 }, parseAttemptTimeout)
 
 var rateLimitSetting = settings.Define(settings.Variable{

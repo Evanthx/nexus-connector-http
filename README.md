@@ -29,6 +29,9 @@ It runs as one program, the Outbound Connector, which runs as a Nexus operation 
 requests: it sends requests **out** of Temporal to the APIs you call. A workflow describes a request (URL, method, headers, body, and which API key to use)
 and calls the Outbound Connector's one operation, `HTTPService.request`. The Outbound Connector
 sends the request, retries it when retrying can help, and returns the response or the final error.
+By default each call runs as a standalone activity with the Outbound Connector's own retries; for
+fast calls, `HTTP_CONNECTOR_MODE=sync` runs it within the Nexus request instead, with no activity,
+which costs less (see [Activity or sync mode](docs/errors.md#activity-or-sync-mode)).
 It works on its own, but it is [best used as a building block](#best-used-as-a-building-block) for
 API-specific connectors.
 
@@ -60,7 +63,8 @@ typed interface for that API instead:
   `getWeatherByZip(zip) → weather`. Callers never see a URL or a credential.
 - **Each operation maps its input onto an HTTP request** and names the secret to use and where
   the API expects it. It never reads the secret itself. It sends the request with
-  `httpconnector`'s `Request`, called as a function inside its own activity.
+  `httpconnector`'s `Send` (one attempt), called as a function inside its own activity, or inside
+  a synchronous Nexus operation with `RequestSync`.
 - **A standalone activity for one call, a workflow for several.** An operation that makes one
   call is backed by a standalone activity. One that needs several calls can be backed by a
   workflow that runs each call as its own activity, so Temporal orchestrates them and doesn't
@@ -96,8 +100,9 @@ tends to write them again:
   succeed.
 - **Backing off from rate limits.** After a 429, the Outbound Connector holds back every request to that
   endpoint and key for a window, instead of each caller hammering it.
-- **Timeouts.** Each attempt has a timeout, and retries stop just before the caller's own deadline,
-  so the caller gets the real last error rather than a bare timeout.
+- **Timeouts.** Each attempt has a timeout, and in the default activity mode retries stop just
+  before the caller's own deadline, so the caller gets the real last error rather than a bare
+  timeout.
 - **Keeping API keys out of workflow history.** Requests name an environment variable on the
   Outbound Connector; the key is read at send time and redacted from responses and error messages.
 - **Limiting where requests can go.** An optional allowlist restricts the hosts the Outbound Connector will
@@ -145,7 +150,9 @@ Java. See [Typed clients](docs/clients.md).
 
 **What happens when the API is down or rate limiting me?**
 5xx responses and network errors are retried with backoff; 429s wait out a rate-limit window; both
-stop just before your operation's timeout. See [Errors, timeouts, and rate limiting](docs/errors.md).
+stop just before your operation's timeout. In sync mode your Temporal server retries them with its
+own backoff instead, and if they never succeed you get a timeout. See
+[Errors, timeouts, and rate limiting](docs/errors.md).
 
 **Can I stop the Outbound Connector from calling arbitrary hosts?**
 Yes, and by default it must: `HTTP_CONNECTOR_ALLOWED_DOMAINS` is required and lists the domains it
@@ -169,7 +176,7 @@ process. Your own workers use the same codec. The HTTP API gets the request decr
 - [Typed clients](docs/clients.md): the contract, and generating clients for Go, Python, TypeScript,
   and Java.
 - [Errors, timeouts, and rate limiting](docs/errors.md): error types, reading error details,
-  timeouts, rate limiting, and known limitations.
+  timeouts, rate limiting, activity or sync mode, and known limitations.
 - [Testing](docs/testing.md): running the test workflow and the test suites.
 - [Encryption](docs/encryption.md): encrypting every payload so data reaches Temporal only
   encrypted, with your codec server or a codec compiled in, and trying it with the test workflow.

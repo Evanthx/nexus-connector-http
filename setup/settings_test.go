@@ -15,6 +15,7 @@ const (
 	attemptTimeout = httpconnector.AttemptTimeoutEnvVar
 	rateLimit      = httpconnector.RateLimitMinutesEnvVar
 	maxDuration    = httpconnector.MaxDurationEnvVar
+	mode           = httpconnector.ModeEnvVar
 	secretPrefix   = httpconnector.SecretEnvPrefix
 	domainsSuffix  = httpconnector.SecretDomainsSuffix
 )
@@ -33,6 +34,7 @@ func TestConfig_Defaults(t *testing.T) {
 	cfg, err := load(settings.Map{allowedDomains: "example.com"})
 	require.NoError(t, err)
 	require.Equal(t, httpconnector.Config{
+		Mode:            httpconnector.ModeActivity,
 		AllowedDomains:  []string{"example.com"},
 		AttemptTimeout:  60 * time.Second,
 		RateLimitWindow: 5 * time.Minute,
@@ -45,7 +47,9 @@ func TestConfig_Defaults(t *testing.T) {
 func TestConfig_ReadsOnlyItsEnv(t *testing.T) {
 	t.Setenv(allowedDomains, "") // would fail the process's
 	t.Setenv(secretPrefix+"PAGE", "from_the_process")
+	t.Setenv(mode, "activity")
 	cfg, err := load(settings.Map{
+		mode:                                  "sync",
 		allowedDomains:                        "example.com",
 		rateLimit:                             "7",
 		maxDuration:                           "8",
@@ -56,6 +60,7 @@ func TestConfig_ReadsOnlyItsEnv(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, httpconnector.Config{
+		Mode:            httpconnector.ModeSync,
 		AllowedDomains:  []string{"example.com"},
 		AllowRedirects:  true,
 		AttemptTimeout:  30 * time.Second,
@@ -113,6 +118,21 @@ func TestAllowRedirects(t *testing.T) {
 	}
 }
 
+func TestMode(t *testing.T) {
+	for v, want := range map[string]httpconnector.Mode{
+		"": httpconnector.ModeActivity, "activity": httpconnector.ModeActivity, "sync": httpconnector.ModeSync,
+		" SYNC ": httpconnector.ModeSync, "Activity": httpconnector.ModeActivity,
+	} {
+		got, err := modeSetting.Get(settings.Map{mode: v})
+		require.NoError(t, err, "value %q", v)
+		require.Equal(t, want, got, "value %q", v)
+	}
+	for _, bad := range []string{"async", "workflow", "true"} {
+		_, err := modeSetting.Get(settings.Map{mode: bad})
+		require.EqualError(t, err, mode+` must be "activity" or "sync", not "`+bad+`"`)
+	}
+}
+
 func TestAttemptTimeout(t *testing.T) {
 	d, err := attemptTimeoutSetting.Get(settings.Map{attemptTimeout: "10"})
 	require.NoError(t, err)
@@ -158,7 +178,7 @@ func TestOutbound_ListsEveryVariable(t *testing.T) {
 	for _, v := range Outbound.Variables() {
 		listed[v.Name] = v.Help
 	}
-	for _, name := range []string{allowedDomains, allowRedirects, attemptTimeout, rateLimit, maxDuration,
+	for _, name := range []string{mode, allowedDomains, allowRedirects, attemptTimeout, rateLimit, maxDuration,
 		"TEMPORAL_ADDRESS", "TEMPORAL_NAMESPACE", "TEMPORAL_API_KEY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"} {
 		require.NotEmpty(t, listed[name], name)
 	}

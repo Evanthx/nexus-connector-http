@@ -23,6 +23,7 @@ func (a *HTTPActivities) Report(temporal client.Options) string {
 	sections := []report.Section{
 		{Title: "Allowed hosts", Settings: []report.Setting{{Name: AllowedDomainsEnvVar, Value: domains}}},
 		{Title: "Requests", Settings: []report.Setting{
+			report.Env(a.env, ModeEnvVar, a.mode),
 			report.Env(a.env, AllowRedirectsEnvVar, a.allowRedirects),
 			report.Env(a.env, AttemptTimeoutEnvVar, a.attemptTimeout),
 			report.Env(a.env, RateLimitMinutesEnvVar, a.lim.ttl),
@@ -31,7 +32,7 @@ func (a *HTTPActivities) Report(temporal client.Options) string {
 		temporalclient.Section(a.env, temporal),
 	}
 	behavior := append([]string{fmt.Sprintf("Serve the HTTPService Nexus service, with the operation request, and run requests on "+
-		"the task queue %q: point the Outbound Connector's Nexus endpoint at it.", TaskQueue)}, a.Describe()...)
+		"the task queue %q: point the Outbound Connector's Nexus endpoint at it.", TaskQueue), a.modeLine()}, a.Describe()...)
 	return report.Format("Outbound Connector", sections, behavior)
 }
 
@@ -65,4 +66,15 @@ func secretHostsLine(secretDomains, allowed []string) string {
 	default:
 		return fmt.Sprintf("any allowed domain (%s)", DisableAllowlist)
 	}
+}
+
+// modeLine says how each call runs (ModeEnvVar), for the startup report.
+func (a *HTTPActivities) modeLine() string {
+	if a.mode == ModeSync {
+		return fmt.Sprintf("Run each call within its Nexus request, with no activity (%s=%s): one attempt per request, "+
+			"which must finish within it (about 10 seconds). The caller's Temporal server retries failures with its own backoff; "+
+			"a caller whose retries never succeed gets a timeout.", ModeEnvVar, ModeSync)
+	}
+	return fmt.Sprintf("Run each call as a standalone activity (%s=%s), retried with this connector's policy until 10 seconds "+
+		"before the caller's Nexus operation times out, or %s.", ModeEnvVar, ModeActivity, MaxDurationEnvVar)
 }

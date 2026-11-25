@@ -6,6 +6,8 @@ Common errors, their causes, and fixes.
 
 **`HTTP_CONNECTOR_RATE_LIMIT_MINUTES must be a whole number of minutes, at least 1, not "..."`** (or `MAX_DURATION_MINUTES`): the value must be a whole number of minutes, at least 1. Any other value (a float, a string, 0) causes the Outbound Connector to exit before logging `Starting worker`.
 
+**`HTTP_CONNECTOR_MODE must be "activity" or "sync", not "..."`**: set it to `activity` (the default) or `sync`, in any case, or leave it unset.
+
 **`set HTTP_CONNECTOR_ALLOWED_DOMAINS: ...`**: the variable is unset or empty. Set it to the comma-separated domains the Outbound Connector may call, or to `DISABLE ALLOWLIST` to allow any host. See [Usage — allowed domains](usage.md#allowed-domains).
 
 **`HTTP_CONNECTOR_SECRET_X needs HTTP_CONNECTOR_SECRET_X_DOMAINS`**: every secret variable needs a list of the hosts it may be sent to. Set `HTTP_CONNECTOR_SECRET_X_DOMAINS`, such as `api.example.com`. See [Usage — API keys and secrets](usage.md#api-keys-and-secrets).
@@ -20,7 +22,7 @@ Common errors, their causes, and fixes.
 
 ## Every call fails at once
 
-**`handler error (BAD_REQUEST)`** with the Outbound Connector logging `completion callbacks are not enabled for this namespace`: the Outbound Connector's namespace was not started with `activity.enableCallbacks=true`. Restart the dev server with that flag and recreate the endpoint. On Temporal Cloud, confirm with Temporal support that this feature is enabled for your namespace.
+**`handler error (BAD_REQUEST)`** with the Outbound Connector logging `completion callbacks are not enabled for this namespace`: the Outbound Connector runs in activity mode (the default), and its namespace was not started with `activity.enableCallbacks=true`. Restart the dev server with that flag and recreate the endpoint. On Temporal Cloud, confirm with Temporal support that this feature is enabled for your namespace. Or, for fast calls, set `HTTP_CONNECTOR_MODE=sync`, which needs no activity (see [Errors — activity or sync mode](errors.md#activity-or-sync-mode)).
 
 **`unable to decode: Payload validation failed`**: the request JSON does not match the contract. Missing `url`, an unknown field, or a method that is not in the allowed list (see [Usage — options](usage.md#options)). A Go caller using `generated/httpapi` gets a `PayloadValidationError` with field-level details.
 
@@ -40,7 +42,7 @@ A workflow that never advances past the Nexus operation usually means one of:
 
 ## Calls fail after retrying
 
-**`Transient: ... returned status 503`** (or similar 5xx): the target server is returning errors. The Outbound Connector retried until the caller's timeout expired. See [Errors — timeouts](errors.md#timeouts) to understand when retries stop.
+**`Transient: ... returned status 503`** (or similar 5xx): the target server is returning errors. The Outbound Connector retried until shortly before the caller's timeout. See [Errors — timeouts](errors.md#timeouts) to understand when retries stop.
 
 **`RateLimited`**: the target server returned 429. The Outbound Connector waited for the rate-limit window (`HTTP_CONNECTOR_RATE_LIMIT_MINUTES`, default 5 minutes) but the caller's timeout ran out before another window fit. Increase the caller's `ScheduleToCloseTimeout` or reduce the rate-limit window.
 
@@ -49,6 +51,18 @@ A workflow that never advances past the Nexus operation usually means one of:
 **`ClientError: ... redirected to "...", which is not on the Outbound Connector's list of allowed domains`**: a redirect took the request to a host not in `HTTP_CONNECTOR_ALLOWED_DOMAINS`. The redirect target host must be added to the list if the redirect is expected. See [Usage — allowed domains](usage.md#allowed-domains).
 
 **`ClientError: ... TLS certificate`**: the target server's certificate did not verify. The Outbound Connector treats this as a non-retryable error. Check that the URL is correct and the server's certificate is valid.
+
+## A sync-mode call times out with no HTTP error
+
+**`operation timed out (type: ScheduleToClose)`**, a `TimeoutError` rather than one of the Outbound Connector's error types: with `HTTP_CONNECTOR_MODE=sync`, each attempt failed with a retryable error and the caller's Temporal server retried until the caller's Nexus operation timed out. In sync mode the caller gets only the timeout, not the last error.
+
+To find the reason, describe the caller's workflow while it is still retrying:
+
+```bash
+temporal workflow describe --namespace <caller's namespace> --workflow-id <id>
+```
+
+The pending Nexus operation shows its attempt count and last attempt failure. If that failure is `no response before the Nexus request's deadline`, the endpoint is too slow for sync mode: each call must finish within one Nexus request, about 10 seconds. Set `HTTP_CONNECTOR_MODE=activity` on the Outbound Connector (and `activity.enableCallbacks=true` on its namespace) for slow endpoints. If it is a `Transient` or `RateLimited` error, the endpoint is failing or rate limiting; activity mode would return that error to the caller instead of a timeout. See [Errors — activity or sync mode](errors.md#activity-or-sync-mode).
 
 ## Response body is `[REDACTED]`
 
